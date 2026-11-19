@@ -1,0 +1,9 @@
+EmployeeID,Department,Location,Salary_USD,Years_Experience,Start_Date
+E001,Engineering,Lagos,42000,4,2022-02-01
+E002,Support,Abuja,23000,2,2024-05-01
+E003,Engineering,Lagos,51000,6,2020-09-15
+E004,Operations,Ibadan,,3,2023-03-02
+E005,Support,Lagos,25000,3,2023-01-10
+E006,Operations,Abuja,32000,5,2021-07-20
+E007,Engineering,Abuja,47000,5,2021-08-05
+E008,Support,,22000,1,2025-04-03

@@ -1,0 +1,25 @@
+Date,Product,Region,Units_Sold,Revenue_NGN
+2026-01-04,Laptop,Lagos,3,1850000
+2026-01-09,Headphones,Abuja,8,280000
+2026-01-15,Mouse,Ibadan,15,225000
+2026-01-24,Keyboard,Lagos,7,245000
+2026-02-03,Laptop,Abuja,2,1240000
+2026-02-10,Headphones,Lagos,12,420000
+2026-02-17,Mouse,Port Harcourt,13,195000
+2026-02-25,Keyboard,Ibadan,6,210000
+2026-03-05,Laptop,Lagos,4,2480000
+2026-03-12,Headphones,Ibadan,9,315000
+2026-03-18,Mouse,Abuja,11,165000
+2026-03-27,Keyboard,Lagos,10,350000
+2026-04-04,Laptop,Port Harcourt,3,1860000
+2026-04-11,Headphones,Abuja,14,490000
+2026-04-19,Mouse,Lagos,16,240000
+2026-04-26,Keyboard,Ibadan,8,280000
+2026-05-03,Laptop,Lagos,5,3100000
+2026-05-10,Headphones,Port Harcourt,11,385000
+2026-05-18,Mouse,,19,285000
+2026-05-25,Keyboard,Abuja,9,315000
+2026-06-05,Laptop,Abuja,4,2480000
+2026-06-12,Headphones,Lagos,13,455000
+2026-06-19,Mouse,Ibadan,21,
+2026-06-26,Keyboard,Port Harcourt,12,420000

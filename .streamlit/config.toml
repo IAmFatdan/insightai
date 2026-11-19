@@ -1,0 +1,33 @@
+[server]
+maxUploadSize = 15
+headless = true
+enableXsrfProtection = true
+enableCORS = true
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+font = "sans serif"
+
+[theme.light]
+primaryColor = "#0d9488"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f1f5f9"
+textColor = "#172b3a"
+
+[theme.light.sidebar]
+backgroundColor = "#f1f5f9"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#172b3a"
+
+[theme.dark]
+primaryColor = "#2dd4bf"
+backgroundColor = "#0b1220"
+secondaryBackgroundColor = "#172337"
+textColor = "#e5edf6"
+
+[theme.dark.sidebar]
+backgroundColor = "#101b2c"
+secondaryBackgroundColor = "#1c2c43"
+textColor = "#e5edf6"
