@@ -24,7 +24,7 @@ from core.data_analysis import (
 from core.data_cleaning import OPERATIONS, clean, replay
 from core.chart_builder import build_chart, CHARTS
 from core.chat_engine import Plan, make_plan, infer_plan, execute_plan
-from core.ai_service import AIService, DEFAULT_MODEL, MAX_CALLS
+from core.ai_service import AIService, DEFAULT_MODEL, DEFAULT_GEMINI_MODEL, MAX_CALLS
 from core.report_generator import csv_bytes, excel_bytes, pdf_bytes
 
 st.set_page_config(
@@ -106,7 +106,8 @@ for key, value in {
     "messages": [],
     "api_budget": {"calls": 0, "last_call": 0},
     "ai_enabled": False,
-    "model": os.getenv("OPENAI_MODEL", DEFAULT_MODEL),
+    "ai_provider": "Gemini",
+    "model": os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
     "filter_epoch": 0,
     "data_revision": 0,
 }.items():
@@ -149,17 +150,34 @@ def change_data(actions):
     st.rerun()
 
 
-def credentials():
-    key = os.getenv("OPENAI_API_KEY", "")
+def credentials(provider=None):
+    # Read credentials only on the server; never display their values in the UI.
+    provider = provider or ss.ai_provider
+    setting = "GEMINI_API_KEY" if provider == "Gemini" else "OPENAI_API_KEY"
+    key = os.getenv(setting, "")
     try:
-        key = st.secrets.get("OPENAI_API_KEY", key)
+        key = st.secrets.get(setting, key)
     except (FileNotFoundError, KeyError):
         pass
     return key
 
 
 def service():
-    return AIService(credentials(), ss.model, ss.ai_enabled, ss.api_budget)
+    return AIService(
+        credentials(), ss.model, ss.ai_enabled, ss.api_budget, provider=ss.ai_provider
+    )
+
+
+def change_ai_provider():
+    # Streamlit callbacks run before the new page is drawn, so the model input
+    # can be safely updated when the provider changes.
+    ss.model = (
+        os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
+        if ss.ai_provider == "Gemini"
+        else os.getenv("OPENAI_MODEL", DEFAULT_MODEL)
+    )
+    ss.pop("ai_result", None)
+    ss.pop("pending_plan", None)
 
 
 def save_ai_consent():
@@ -793,7 +811,7 @@ elif page == "Chat With Your Data":
             st.rerun()
     if ss.ai_enabled and ss.get("unresolved_question"):
         st.caption(
-            "Optional planner sends this question, column names/types and the last plan to OpenAI. You must review its proposed calculation before running it."
+            f"Optional planner sends this question, column names/types and the last plan to {ss.ai_provider}. You must review its proposed calculation before running it."
         )
         st.write(ss.unresolved_question)
         if st.button("Ask AI to propose a calculation"):
@@ -894,7 +912,7 @@ elif page == "Settings / About":
     with st.container(border=True):
         st.subheader("External AI processing")
         st.write(
-            "AI requests may incur OpenAI API charges. This application makes no request until you enable processing and click an AI action. Each browser session allows up to 10 attempts, with no automatic retries and a 1,600-output-token cap per request. These are usage controls, not an account-wide spending cap."
+            "External AI requests may incur charges, depending on your provider, model and billing tier. The app sends no AI request until you enable processing and click an AI action. Each browser session allows up to 10 attempts, with no automatic retries and a 1,600-output-token cap per request. These are usage controls, not an account-wide spending cap."
         )
         # Restore widget state from the permanent session key before rendering it.
         ss._ai_consent = ss.ai_enabled
@@ -903,28 +921,39 @@ elif page == "Settings / About":
             key="_ai_consent",
             on_change=save_ai_consent,
         )
-        st.text_input("OpenAI model ID", key="model")
+        st.selectbox(
+            "AI provider",
+            ["Gemini", "OpenAI"],
+            key="ai_provider",
+            on_change=change_ai_provider,
+        )
+        st.text_input(f"{ss.ai_provider} model ID", key="model")
         st.caption(
-            f'API attempts this session: {ss.api_budget["calls"]}/{MAX_CALLS}. Configure account/project spending limits separately. Switching datasets disables consent, but does not reset this counter.'
+            f'API attempts this session: {ss.api_budget["calls"]}/{MAX_CALLS}. Configure provider spending and rate limits separately. Switching datasets disables consent, but does not reset this counter.'
         )
+        setting = "GEMINI_API_KEY" if ss.ai_provider == "Gemini" else "OPENAI_API_KEY"
         st.info(
-            "An API key is configured."
+            f"{ss.ai_provider} API key is configured."
             if credentials()
-            else "No API key configured. Set OPENAI_API_KEY as an environment variable or in .streamlit/secrets.toml. Local features do not need one."
+            else f"No {ss.ai_provider} API key configured. Set {setting} in Streamlit Cloud Secrets. Local features do not need one."
         )
+        if ss.ai_provider == "Gemini":
+            st.caption(
+                "Gemini free-tier access is model- and project-dependent and has usage limits. Do not send sensitive data on the free tier."
+            )
     st.markdown("### Privacy and operating limits")
     st.write(
         "Uploaded datasets and chat live in Streamlit session memory; this app does not write them to a database or share a global data cache. Hosting infrastructure, browser memory and external AI providers have their own retention behavior. This is not a guarantee of secure deletion or tenant isolation suitable for regulated data."
     )
     st.write(
-        "Insights requests send displayed aggregate findings and category labels. Planner requests send your question, schema and prior structured plan. Review labels and questions for sensitive information. Responses use store=False; provider retention policies still apply."
+        "Insights requests send displayed aggregate findings and category labels. Planner requests send your question, schema and prior structured plan. Review labels and questions for sensitive information. Provider data handling differs: OpenAI requests use store=False; Gemini requests follow Google’s retention and free-tier data-use policies."
     )
     st.write(
         "Uploads: 15 MB, 100,000 rows, 100 columns, 2 million cells, 80 MB estimated DataFrame memory. XLSX expanded bytes are capped at 80 MB. Cleaning history: 50 steps. Chat: last 30 messages. Browser refresh or session loss can discard work; export it when needed."
     )
     st.markdown("### Beginner’s guide")
     st.write(
-        "Pandas computes the numbers. Plotly draws the charts. Streamlit manages the screen and session. Optional OpenAI commentary interprets a small summary. A validated plan selects trusted calculations; generated code is never executed."
+        "Pandas computes the numbers. Plotly draws the charts. Streamlit manages the screen and session. Optional Gemini or OpenAI commentary interprets a small summary. A validated plan selects trusted calculations; generated code is never executed."
     )
     st.write(
         "Use the Streamlit menu → Settings to switch between light and dark themes. Dates are inferred only when already datetime or unambiguous ISO; use Data Cleaning for other formats."
