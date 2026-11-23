@@ -9,7 +9,7 @@ from .chat_engine import Plan
 from .data_loader import DataError
 
 DEFAULT_MODEL = "gpt-4.1-mini"
-DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-lite"
+DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite"
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 MAX_CALLS = 10
 
@@ -114,7 +114,7 @@ class AIService:
             advice = {
                 401: "The API key was rejected. Check your local key configuration.",
                 403: "The API project does not have permission for this request.",
-                404: "The selected model is unavailable. Check the model ID and project access.",
+                404: f"The selected {self.provider} model ({self.model}) is unavailable. Check that this model is accessible to your API project.",
                 429: "API quota or rate limit reached. Check the selected provider’s free-tier quota, billing and rate limits.",
                 400: "The model rejected these structured-output settings. Choose a supported model.",
             }

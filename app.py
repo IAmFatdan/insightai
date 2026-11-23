@@ -169,13 +169,22 @@ def service():
 
 
 def change_ai_provider():
-    # Streamlit callbacks run before the new page is drawn, so the model input
-    # can be safely updated when the provider changes.
+    # Copy the temporary widget value into durable session state. Streamlit
+    # clears widget-owned keys when navigating to pages that do not draw them.
+    ss.ai_provider = ss.get("_ai_provider_widget", "Gemini")
     ss.model = (
         os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
         if ss.ai_provider == "Gemini"
         else os.getenv("OPENAI_MODEL", DEFAULT_MODEL)
     )
+    ss._ai_model_widget = ss.model
+    ss.pop("ai_result", None)
+    ss.pop("pending_plan", None)
+
+
+def save_ai_model():
+    # The model ID needs a separate durable session key, just like consent.
+    ss.model = str(ss.get("_ai_model_widget", ss.model)).strip()
     ss.pop("ai_result", None)
     ss.pop("pending_plan", None)
 
@@ -666,6 +675,7 @@ elif page == "AI Insights":
     st.caption(
         "AI receives only the findings shown above, including category labels. Review these before sending. It does not receive raw rows. Model commentary can still be wrong."
     )
+    st.caption(f"AI provider: {ss.ai_provider} · Model: {ss.model}")
     if not ss.ai_enabled:
         st.info(
             "Enable external processing in Settings / About to request an explanation. These calculated findings work without an API key."
@@ -921,13 +931,21 @@ elif page == "Settings / About":
             key="_ai_consent",
             on_change=save_ai_consent,
         )
+        # The provider and model inputs are temporary widget keys; persistent
+        # values live in ss.ai_provider and ss.model across workspace pages.
+        ss._ai_provider_widget = ss.ai_provider
         st.selectbox(
             "AI provider",
             ["Gemini", "OpenAI"],
-            key="ai_provider",
+            key="_ai_provider_widget",
             on_change=change_ai_provider,
         )
-        st.text_input(f"{ss.ai_provider} model ID", key="model")
+        ss._ai_model_widget = ss.model
+        st.text_input(
+            f"{ss.ai_provider} model ID",
+            key="_ai_model_widget",
+            on_change=save_ai_model,
+        )
         st.caption(
             f'API attempts this session: {ss.api_budget["calls"]}/{MAX_CALLS}. Configure provider spending and rate limits separately. Switching datasets disables consent, but does not reset this counter.'
         )
