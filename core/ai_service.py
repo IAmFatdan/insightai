@@ -9,7 +9,7 @@ from .chat_engine import Plan
 from .data_loader import DataError
 
 DEFAULT_MODEL = "gpt-4.1-mini"
-DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite"
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash-lite"
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 MAX_CALLS = 10
 
