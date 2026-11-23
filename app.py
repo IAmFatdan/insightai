@@ -162,6 +162,12 @@ def service():
     return AIService(credentials(), ss.model, ss.ai_enabled, ss.api_budget)
 
 
+def save_ai_consent():
+    # Keep the dataset-scoped permission separate from Streamlit's widget state.
+    # Streamlit removes widget keys when the widget is not rendered on another page.
+    ss.ai_enabled = bool(ss.get("_ai_consent", False))
+
+
 with st.sidebar:
     st.markdown(
         '<div class="brand"><span class="brand-mark" aria-hidden="true">◈</span>InsightAI</div><div class="brand-note">Your data. Clearer decisions.</div>',
@@ -890,7 +896,13 @@ elif page == "Settings / About":
         st.write(
             "AI requests may incur OpenAI API charges. This application makes no request until you enable processing and click an AI action. Each browser session allows up to 10 attempts, with no automatic retries and a 1,600-output-token cap per request. These are usage controls, not an account-wide spending cap."
         )
-        st.checkbox("Enable external AI processing for this dataset", key="ai_enabled")
+        # Restore widget state from the permanent session key before rendering it.
+        ss._ai_consent = ss.ai_enabled
+        st.checkbox(
+            "Enable external AI processing for this dataset",
+            key="_ai_consent",
+            on_change=save_ai_consent,
+        )
         st.text_input("OpenAI model ID", key="model")
         st.caption(
             f'API attempts this session: {ss.api_budget["calls"]}/{MAX_CALLS}. Configure account/project spending limits separately. Switching datasets disables consent, but does not reset this counter.'
