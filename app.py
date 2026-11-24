@@ -1,4 +1,4 @@
-"""InsightAI 1.0: interface only; trusted calculations live in core/."""
+"""InsightAI 2.0: evidence-first analytics with optional Gemini commentary."""
 
 from pathlib import Path
 from html import escape
@@ -21,6 +21,7 @@ from core.data_analysis import (
     filter_data,
     monthly,
 )
+from core.advanced_analysis import advanced_report, extra_facts
 from core.data_cleaning import OPERATIONS, clean, replay
 from core.chart_builder import build_chart, CHARTS
 from core.chat_engine import Plan, make_plan, infer_plan, execute_plan
@@ -666,7 +667,96 @@ elif page == "Dashboard":
 
 elif page == "AI Insights":
     st.title("Evidence first. Interpretation second.")
-    verified = facts(filtered, metric, group, dates[0] if len(dates) == 1 else None)
+    insight_date = date_filter if date_filter in dates else (
+        dates[0] if len(dates) == 1 else None
+    )
+    advanced = advanced_report(
+        filtered, metric=metric, group=group, date=insight_date
+    )
+    basic = facts(filtered, metric, group, insight_date)
+    verified = basic + extra_facts(advanced, next_id=len(basic) + 1)
+
+    st.caption(
+        "Every figure below is calculated locally from the current filtered "
+        "dataset. AI commentary is optional."
+    )
+    with st.expander("Analytical scorecard · calculated in Python", expanded=True):
+        quality = advanced["quality"]
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Selected records", f'{quality["rows"]:,}')
+        k2.metric("Missing cells", f'{quality["missing_cells"]:,}')
+        k3.metric("Records with missing data", f'{quality["rows_with_missing"]:,}')
+        k4.metric("Duplicate rows", f'{quality["duplicate_rows"]:,}')
+
+        if quality["missing_by_column"]:
+            st.markdown("**Columns with missing values**")
+            quality_table = pd.DataFrame([
+                {
+                    "Column": item["column"],
+                    "Missing cells": item["missing"],
+                    "Missing (%)": round(item["pct"], 2)
+                    if item["pct"] is not None else None,
+                }
+                for item in quality["missing_by_column"][:10]
+            ])
+            st.dataframe(quality_table, hide_index=True, width="stretch")
+
+        categories = advanced["categories"]
+        if categories and categories["top"]:
+            st.markdown("**Top categories by recorded metric total**")
+            category_table = pd.DataFrame([
+                {
+                    "Category": row["category"],
+                    "Records": row["records"],
+                    f"Recorded {metric}": round(row["total"], 2),
+                    "Contribution (%)": round(row["contribution_pct"], 2)
+                    if row["contribution_pct"] is not None else None,
+                }
+                for row in categories["top"]
+            ])
+            st.dataframe(category_table, hide_index=True, width="stretch")
+            st.caption(
+                categories["share_note"]
+                + " Categories without recorded values are excluded from rankings."
+            )
+
+        periods = advanced["periods"]
+        if periods and periods["comparison"]:
+            comparison = periods["comparison"]
+            st.markdown("**Last two calendar months · recorded metric**")
+            left, right = st.columns(2)
+            left.metric(
+                comparison["previous_month"],
+                format_value(comparison["previous_total"], unit),
+            )
+            right.metric(
+                comparison["current_month"],
+                format_value(comparison["current_total"], unit),
+                delta=(
+                    f'{comparison["percentage_change"]:+.2f}% vs previous month'
+                    if comparison["percentage_change"] is not None else None
+                ),
+            )
+            st.write(
+                "Recorded absolute change: "
+                + format_value(comparison["absolute_change"], unit)
+            )
+            st.caption(periods["caution"])
+        elif periods:
+            st.caption(
+                "A period comparison requires two consecutive calendar months "
+                "with recorded values."
+            )
+
+        if advanced["outliers"] and advanced["outliers"]["flagged"]:
+            outliers = advanced["outliers"]
+            st.warning(
+                f'{outliers["flagged"]:,} potential {metric} outliers were '
+                "flagged using the IQR rule. Review them; unusual values "
+                "are not automatically errors."
+            )
+
+    st.markdown("### Verified findings")
     for fact in verified:
         with st.container(border=True):
             st.caption(fact["id"] + " · CALCULATED FINDING")
@@ -922,7 +1012,7 @@ elif page == "Settings / About":
     with st.container(border=True):
         st.subheader("External AI processing")
         st.write(
-            "External AI requests may incur charges, depending on your provider, model and billing tier. The app sends no AI request until you enable processing and click an AI action. Each browser session allows up to 10 attempts, with no automatic retries and a 1,600-output-token cap per request. These are usage controls, not an account-wide spending cap."
+            "External AI requests may incur charges, depending on your provider, model and billing tier. The app sends no AI request until you enable processing and click an AI action. Each browser session allows up to 10 user-triggered AI actions; the client may retry eligible transient errors up to twice. Retries may count toward provider quotas. The output limit is 1,600 tokens per request. These are usage controls, not an account-wide spending cap."
         )
         # Restore widget state from the permanent session key before rendering it.
         ss._ai_consent = ss.ai_enabled
@@ -977,7 +1067,7 @@ elif page == "Settings / About":
         "Use the Streamlit menu → Settings to switch between light and dark themes. Dates are inferred only when already datetime or unambiguous ISO; use Data Cleaning for other formats."
     )
     st.caption(
-        "InsightAI 1.0 · Original sales sample preserved · No deployment performed"
+        "InsightAI 2.0 Phase 2 · Deterministic analytical scorecard · Original sales sample preserved"
     )
 
 st.divider()
