@@ -1,4 +1,4 @@
-"""InsightAI 2.0: evidence-first analytics with optional Gemini commentary."""
+"""InsightAI 2.0: evidence-first analytics and optional Gemini commentary."""
 
 from pathlib import Path
 from html import escape
@@ -108,6 +108,7 @@ for key, value in {
     "api_budget": {"calls": 0, "last_call": 0},
     "ai_enabled": False,
     "ai_provider": "Gemini",
+    "ai_report_style": "Evidence-linked brief (recommended)",
     "model": os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
     "filter_epoch": 0,
     "data_revision": 0,
@@ -194,6 +195,15 @@ def save_ai_consent():
     # Keep the dataset-scoped permission separate from Streamlit's widget state.
     # Streamlit removes widget keys when the widget is not rendered on another page.
     ss.ai_enabled = bool(ss.get("_ai_consent", False))
+
+
+def change_ai_report_style():
+    # Keep presentation choice across page navigation, but invalidate stale reports.
+    ss.ai_report_style = ss.get(
+        "_ai_style_widget", "Evidence-linked brief (recommended)"
+    )
+    ss.pop("ai_result", None)
+    ss.pop("generated_exports", None)
 
 
 with st.sidebar:
@@ -667,95 +677,92 @@ elif page == "Dashboard":
 
 elif page == "AI Insights":
     st.title("Evidence first. Interpretation second.")
-    insight_date = date_filter if date_filter in dates else (
-        dates[0] if len(dates) == 1 else None
+    insight_date = (
+        date_filter if date_filter in dates else (dates[0] if len(dates) == 1 else None)
     )
-    advanced = advanced_report(
-        filtered, metric=metric, group=group, date=insight_date
-    )
+    advanced = advanced_report(filtered, metric=metric, group=group, date=insight_date)
     basic = facts(filtered, metric, group, insight_date)
     verified = basic + extra_facts(advanced, next_id=len(basic) + 1)
-
     st.caption(
-        "Every figure below is calculated locally from the current filtered "
-        "dataset. AI commentary is optional."
+        "All calculated evidence is generated locally from the currently filtered dataset. AI is optional."
     )
     with st.expander("Analytical scorecard · calculated in Python", expanded=True):
         quality = advanced["quality"]
         k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Selected records", f'{quality["rows"]:,}')
+        k1.metric("Filtered records", f'{quality["rows"]:,}')
         k2.metric("Missing cells", f'{quality["missing_cells"]:,}')
-        k3.metric("Records with missing data", f'{quality["rows_with_missing"]:,}')
+        k3.metric("Records with missing values", f'{quality["rows_with_missing"]:,}')
         k4.metric("Duplicate rows", f'{quality["duplicate_rows"]:,}')
-
         if quality["missing_by_column"]:
-            st.markdown("**Columns with missing values**")
-            quality_table = pd.DataFrame([
-                {
-                    "Column": item["column"],
-                    "Missing cells": item["missing"],
-                    "Missing (%)": round(item["pct"], 2)
-                    if item["pct"] is not None else None,
-                }
-                for item in quality["missing_by_column"][:10]
-            ])
+            st.caption("Columns requiring missing-value review")
+            quality_table = pd.DataFrame(
+                [
+                    {
+                        "Column": x["column"],
+                        "Missing cells": x["missing"],
+                        "Missing (%)": (
+                            round(x["pct"], 2) if x["pct"] is not None else None
+                        ),
+                    }
+                    for x in quality["missing_by_column"][:10]
+                ]
+            )
             st.dataframe(quality_table, hide_index=True, width="stretch")
-
         categories = advanced["categories"]
         if categories and categories["top"]:
             st.markdown("**Top categories by recorded metric total**")
-            category_table = pd.DataFrame([
-                {
-                    "Category": row["category"],
-                    "Records": row["records"],
-                    f"Recorded {metric}": round(row["total"], 2),
-                    "Contribution (%)": round(row["contribution_pct"], 2)
-                    if row["contribution_pct"] is not None else None,
-                }
-                for row in categories["top"]
-            ])
+            category_table = pd.DataFrame(
+                [
+                    {
+                        "Category": r["category"],
+                        "Records": r["records"],
+                        f"Recorded {metric}": round(r["total"], 2),
+                        "Contribution (%)": (
+                            round(r["contribution_pct"], 2)
+                            if r["contribution_pct"] is not None
+                            else None
+                        ),
+                    }
+                    for r in categories["top"]
+                ]
+            )
             st.dataframe(category_table, hide_index=True, width="stretch")
             st.caption(
                 categories["share_note"]
-                + " Categories without recorded values are excluded from rankings."
+                + " Missing-only categories are excluded from rankings."
             )
-
         periods = advanced["periods"]
         if periods and periods["comparison"]:
             comparison = periods["comparison"]
             st.markdown("**Last two calendar months · recorded metric**")
-            left, right = st.columns(2)
-            left.metric(
+            a, b = st.columns(2)
+            a.metric(
                 comparison["previous_month"],
                 format_value(comparison["previous_total"], unit),
             )
-            right.metric(
+            b.metric(
                 comparison["current_month"],
                 format_value(comparison["current_total"], unit),
                 delta=(
                     f'{comparison["percentage_change"]:+.2f}% vs previous month'
-                    if comparison["percentage_change"] is not None else None
+                    if comparison["percentage_change"] is not None
+                    else None
                 ),
             )
             st.write(
-                "Recorded absolute change: "
-                + format_value(comparison["absolute_change"], unit)
+                f'Absolute change: {format_value(comparison["absolute_change"], unit)}'
             )
             st.caption(periods["caution"])
         elif periods:
             st.caption(
-                "A period comparison requires two consecutive calendar months "
-                "with recorded values."
+                "A period comparison requires two consecutive calendar months with recorded values."
             )
-
         if advanced["outliers"] and advanced["outliers"]["flagged"]:
-            outliers = advanced["outliers"]
+            out = advanced["outliers"]
             st.warning(
-                f'{outliers["flagged"]:,} potential {metric} outliers were '
-                "flagged using the IQR rule. Review them; unusual values "
-                "are not automatically errors."
+                f'{out["flagged"]:,} potential {metric} outliers flagged by the IQR rule. '
+                "This is a review prompt, not proof that values are incorrect; groups may have different typical amounts."
             )
-
     st.markdown("### Verified findings")
     for fact in verified:
         with st.container(border=True):
@@ -763,9 +770,20 @@ elif page == "AI Insights":
             st.write(fact["text"])
     st.markdown("### Optional AI commentary")
     st.caption(
-        "AI receives only the findings shown above, including category labels. Review these before sending. It does not receive raw rows. Model commentary can still be wrong."
+        "AI receives only the verified findings displayed above, not raw dataset rows. "
+        "Interpretations and suggested actions require human review."
     )
     st.caption(f"AI provider: {ss.ai_provider} · Model: {ss.model}")
+    ss._ai_style_widget = ss.ai_report_style
+    report_style = st.radio(
+        "Commentary style",
+        ["Evidence-linked brief (recommended)", "Classic commentary"],
+        key="_ai_style_widget",
+        on_change=change_ai_report_style,
+        horizontal=True,
+        help="The new brief attaches exact Python-computed evidence to each qualitative recommendation. "
+        "Classic keeps the previously working Gemini response format.",
+    )
     if not ss.ai_enabled:
         st.info(
             "Enable external processing in Settings / About to request an explanation. These calculated findings work without an API key."
@@ -775,18 +793,49 @@ elif page == "AI Insights":
     ):
         with st.spinner("Interpreting the verified findings…"):
             try:
-                ss.ai_result = service().explain(verified)
+                analyzer = service()
+                ss.ai_result = (
+                    analyzer.explain_linked(verified)
+                    if report_style.startswith("Evidence-linked")
+                    else analyzer.explain(verified)
+                )
                 ss.pop("generated_exports", None)
             except DataError as exc:
+                ss.pop("ai_result", None)
                 st.warning(str(exc))
     if ss.get("ai_result"):
         result = ss.ai_result
+        st.markdown("#### Executive summary")
         st.write(result["executive_summary"])
-        st.caption("References: " + ", ".join(result["evidence_ids"]))
-        for field in ("hypotheses_to_investigate", "recommendations", "limitations"):
-            st.markdown("#### " + field.replace("_", " ").title())
-            for text in result[field]:
-                st.write("• " + text)
+        if result.get("insights"):
+            st.markdown("#### Evidence-linked insights and next steps")
+            st.caption(
+                "Numbers and finding text below come from Python calculations. "
+                "Implications, priorities, hypotheses and recommended actions are AI suggestions."
+            )
+            for item in result["insights"]:
+                with st.container(border=True):
+                    st.markdown(
+                        f"**{item['priority']} suggested priority · Evidence {item['evidence_id']}**"
+                    )
+                    st.markdown("**Verified finding**")
+                    st.write(item["verified_finding"])
+                    st.markdown("**Possible business implication**")
+                    st.write(item["business_implication"])
+                    st.markdown("**Recommended next step**")
+                    st.write(item["recommended_next_step"])
+                    st.caption(
+                        "Hypothesis to investigate: " + item["hypothesis_to_test"]
+                    )
+        else:
+            st.caption("References: " + ", ".join(result["evidence_ids"]))
+            for field in ("hypotheses_to_investigate", "recommendations"):
+                st.markdown("#### " + field.replace("_", " ").title())
+                for text in result[field]:
+                    st.write("• " + text)
+        st.markdown("#### Limitations")
+        for text in result["limitations"]:
+            st.write("• " + text)
 
 elif page == "Chat With Your Data":
     st.title("Ask your data")
@@ -1012,7 +1061,7 @@ elif page == "Settings / About":
     with st.container(border=True):
         st.subheader("External AI processing")
         st.write(
-            "External AI requests may incur charges, depending on your provider, model and billing tier. The app sends no AI request until you enable processing and click an AI action. Each browser session allows up to 10 user-triggered AI actions; the client may retry eligible transient errors up to twice. Retries may count toward provider quotas. The output limit is 1,600 tokens per request. These are usage controls, not an account-wide spending cap."
+            "External AI requests may incur charges, depending on your provider, model and billing tier. The app sends no AI request until you enable processing and click an AI action. Each browser session allows up to 10 user-triggered AI requests. Eligible transient provider failures may be retried up to twice automatically; these retries may count separately toward provider quotas. The output cap is 1,600 tokens per request. These are usage controls, not an account-wide spending cap."
         )
         # Restore widget state from the permanent session key before rendering it.
         ss._ai_consent = ss.ai_enabled
@@ -1067,7 +1116,7 @@ elif page == "Settings / About":
         "Use the Streamlit menu → Settings to switch between light and dark themes. Dates are inferred only when already datetime or unambiguous ISO; use Data Cleaning for other formats."
     )
     st.caption(
-        "InsightAI 2.0 Phase 2 · Deterministic analytical scorecard · Original sales sample preserved"
+        "InsightAI 2.0 Phase 3 · Evidence-linked commentary · Original sales sample preserved"
     )
 
 st.divider()
