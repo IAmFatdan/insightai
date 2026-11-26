@@ -35,7 +35,7 @@ def safe_frame(df):
 def csv_bytes(df):
     return safe_frame(df).to_csv(index=False).encode('utf-8-sig')
 
-def excel_bytes(df, context, cleaning=None, breakdown=None):
+def excel_bytes(df, context, cleaning=None, breakdown=None, executive=None):
     buffer = BytesIO()
     frames = {'Cleaned data': df, 'Data quality': profile(df),
               'Context': pd.DataFrame([{'Setting': k, 'Value': str(v)} for k, v in context.items()]),
@@ -45,6 +45,25 @@ def excel_bytes(df, context, cleaning=None, breakdown=None):
         frames['Statistics'] = df[nums].describe().T.rename_axis('Column').reset_index()
     if breakdown is not None:
         frames['Analysis'] = breakdown.reset_index(drop=True)
+    if executive:
+        frames['Executive KPIs'] = pd.DataFrame([
+            {'Indicator': c['label'], 'Recorded value': c['value'], 'Definition': c['note']}
+            for c in executive['cards']])
+        frames['Review priorities'] = pd.DataFrame([
+            {'Priority': a['priority'], 'Review item': a['title'],
+             'Verified basis': a['evidence'], 'Suggested action': a['next_step'],
+             'Provenance': a['origin']} for a in executive['actions']])
+        if executive['category_rows']:
+            frames['Category performance'] = pd.DataFrame([
+                {'Category': r['category'], 'Recorded total': r['total'],
+                 'Rows': r['records'], 'Share of recorded total (%)': r['contribution_pct']}
+                for r in executive['category_rows']])
+        if executive['period_rows']:
+            frames['Monthly evidence'] = pd.DataFrame([
+                {'Calendar month': r['month'], 'Recorded total': r['total']}
+                for r in executive['period_rows']])
+        frames['Executive limitations'] = pd.DataFrame([
+            {'Caution': c} for c in executive['cautions']])
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
         for name, frame in frames.items():
             safe_frame(frame).to_excel(writer, sheet_name=name, index=False)
@@ -59,7 +78,7 @@ def excel_bytes(df, context, cleaning=None, breakdown=None):
                 ws.column_dimensions[col[0].column_letter].width = min(44, max(14, len(str(col[0].value or '')) + 3))
     return buffer.getvalue()
 
-def pdf_bytes(df, name, context, cleaning=None, metric=None, group=None, date=None, ai=None):
+def pdf_bytes(df, name, context, cleaning=None, metric=None, group=None, date=None, ai=None, executive=None):
     buffer = BytesIO()
     font_dir = Path(__file__).resolve().parents[1] / 'assets' / 'fonts'
     if 'InsightSans' not in pdfmetrics.getRegisteredFontNames():
@@ -73,6 +92,8 @@ def pdf_bytes(df, name, context, cleaning=None, metric=None, group=None, date=No
     styles.add(ParagraphStyle(name='SmallNote', fontName='InsightSans', fontSize=8, leading=11, textColor=colors.HexColor('#51636b')))
     styles['Title'].textColor = colors.HexColor('#133e45')
     styles['Heading2'].textColor = colors.HexColor('#0f766e')
+    styles['Heading2'].keepWithNext = True
+    styles['Heading3'].keepWithNext = True
     styles['BodyText'].spaceAfter = 6
     # Bundle a licensed Unicode font so PDF rendering is consistent on Windows/Linux.
     def p(value, style='BodyText'):
@@ -96,6 +117,33 @@ def pdf_bytes(df, name, context, cleaning=None, metric=None, group=None, date=No
         story.append(tbl)
         if len(frame) > limit:
             story.append(p(f'First {limit} of {len(frame)} rows shown. Download Excel for full analytical tables.', 'SmallNote'))
+    if executive:
+        heading('Executive snapshot - calculated locally')
+        story.append(p('Scope: selected rows and shared filters only. Recorded totals exclude missing metric values.', 'SmallNote'))
+        for card in executive['cards']:
+            value = (f"{card['value']:,.2f}" if card['kind'] == 'metric'
+                     else f"{card['value']:,}")
+            story.append(p(f"{card['label']}: {value}"))
+        heading('Key verified observations')
+        for headline in executive['headlines']:
+            story.append(p('• ' + headline))
+        heading('Prioritized actions - rule-based suggestions')
+        for item in executive['actions']:
+            story.append(KeepTogether([
+                p(f"{item['priority']} review priority: {item['title']}", 'Heading3'),
+                p('Verified basis: ' + item['evidence']),
+                p('Suggested action: ' + item['next_step']),
+            ]))
+        # Category values appear in the detailed chart/table below; avoid duplicating.
+        if executive['period_rows']:
+            heading('Monthly observations - gaps are not zero')
+            period_frame = pd.DataFrame([
+                {'Calendar month': row['month'], 'Recorded metric total': row['total']}
+                for row in executive['period_rows']])
+            table(period_frame, [175,205], 24)
+        heading('Executive caveats')
+        for text in executive['cautions']:
+            story.append(p('• ' + text, 'SmallNote'))
     heading('Scope and filter context')
     for k, v in context.items():
         story.append(p(f'{k}: {v}', 'SmallNote'))
@@ -156,7 +204,7 @@ def pdf_bytes(df, name, context, cleaning=None, metric=None, group=None, date=No
         for text in ai.get('limitations', []):
             story.append(p(text))
     heading('Limitations')
-    story.append(p('All results describe the selected records only. Missing numeric values are excluded, not treated as zero. Summing identifiers or rates may not be meaningful; verify the metric. Correlation does not establish causation. Calendar months may be incomplete. AI narrative is unverified interpretation; numeric findings are computed with Pandas. The bundled font supports many scripts, but complex-script shaping and every Unicode glyph are not guaranteed; use Excel for exact label fidelity.'))
+    story.append(p('Results describe selected records only. Missing metric values are excluded, not replaced with zero. Verify the metric, filter coverage and calendar completeness. Correlation is not causation. AI interpretations require human review; Pandas calculates the figures. Some complex scripts may not render fully in PDF; use Excel for exact labels.'))
     def footer(canvas, doc):
         canvas.setFont('InsightSans', 8)
         canvas.setFillColor(colors.HexColor('#64748b'))

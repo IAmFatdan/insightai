@@ -1,5 +1,4 @@
 """InsightAI 2.0: evidence-first analytics and optional Gemini commentary."""
-
 from pathlib import Path
 from html import escape
 import hashlib
@@ -9,33 +8,19 @@ import pandas as pd
 import streamlit as st
 from pydantic import ValidationError
 from core.data_loader import load_data, sheet_names, DataError
-from core.data_analysis import (
-    numeric_columns,
-    category_columns,
-    date_columns,
-    date_series,
-    profile,
-    kpis,
-    facts,
-    aggregate,
-    filter_data,
-    monthly,
-)
+from core.data_analysis import (numeric_columns, category_columns, date_columns, date_series,
+                               profile, kpis, facts, aggregate, filter_data, monthly)
 from core.advanced_analysis import advanced_report, extra_facts
+from core.executive_report import executive_report
+import plotly.graph_objects as go
 from core.data_cleaning import OPERATIONS, clean, replay
 from core.chart_builder import build_chart, CHARTS
 from core.chat_engine import Plan, make_plan, infer_plan, execute_plan
 from core.ai_service import AIService, DEFAULT_MODEL, DEFAULT_GEMINI_MODEL, MAX_CALLS
 from core.report_generator import csv_bytes, excel_bytes, pdf_bytes
 
-st.set_page_config(
-    page_title="InsightAI · Data to decisions",
-    page_icon="◈",
-    layout="wide",
-    initial_sidebar_state="auto",
-)
-st.markdown(
-    """<style>
+st.set_page_config(page_title='InsightAI · Data to decisions', page_icon='◈', layout='wide', initial_sidebar_state='auto')
+st.markdown('''<style>
 .block-container {max-width:1400px;padding-top:5rem;padding-bottom:3rem}
 [data-testid="stMetric"] {border:1px solid #94a3b844;border-radius:14px;padding:16px}
 [data-testid="stMetricLabel"] {font-size:.82rem}
@@ -96,26 +81,15 @@ st.markdown(
     [data-testid="stChatMessage"] {padding:.75rem;gap:.5rem}
 }
 @media(prefers-reduced-motion:reduce){.st-key-workspace_nav label[data-baseweb="radio"]{transition:none}}
-</style>""",
-    unsafe_allow_html=True,
-)
+</style>''', unsafe_allow_html=True)
 ROOT = Path(__file__).parent
 ss = st.session_state
-for key, value in {
-    "actions": [],
-    "history": [],
-    "messages": [],
-    "api_budget": {"calls": 0, "last_call": 0},
-    "ai_enabled": False,
-    "ai_provider": "Gemini",
-    "ai_report_style": "Evidence-linked brief (recommended)",
-    "model": os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
-    "filter_epoch": 0,
-    "data_revision": 0,
-}.items():
+for key, value in {'actions': [], 'history': [], 'messages': [], 'api_budget': {'calls':0,'last_call':0},
+                   'ai_enabled': False, 'ai_provider': 'Gemini',
+                   'ai_report_style': 'Evidence-linked brief (recommended)', 'model': os.getenv('GEMINI_MODEL', DEFAULT_GEMINI_MODEL),
+                   'filter_epoch': 0, 'data_revision': 0}.items():
     if key not in ss:
         ss[key] = value
-
 
 def select(label, options, key, default=None, **kwargs):
     if not options:
@@ -125,23 +99,13 @@ def select(label, options, key, default=None, **kwargs):
     index = options.index(default) if default in options else 0
     return st.selectbox(label, options, index=index, key=key, **kwargs)
 
-
-def format_value(value, unit=""):
-    return "N/A" if value is None or pd.isna(value) else f"{unit}{value:,.2f}"
-
+def format_value(value, unit=''):
+    return 'N/A' if value is None or pd.isna(value) else f'{unit}{value:,.2f}'
 
 def invalidate():
-    for key in (
-        "ai_result",
-        "generated_exports",
-        "last_chart",
-        "pending_plan",
-        "previous_plan",
-        "unresolved_question",
-    ):
+    for key in ('ai_result', 'generated_exports', 'last_chart', 'pending_plan', 'previous_plan', 'unresolved_question'):
         ss.pop(key, None)
     ss.messages = []
-
 
 def change_data(actions):
     ss.current, ss.history = replay(ss.original, actions)
@@ -151,132 +115,85 @@ def change_data(actions):
     invalidate()
     st.rerun()
 
-
 def credentials(provider=None):
     # Read credentials only on the server; never display their values in the UI.
     provider = provider or ss.ai_provider
-    setting = "GEMINI_API_KEY" if provider == "Gemini" else "OPENAI_API_KEY"
-    key = os.getenv(setting, "")
+    setting = 'GEMINI_API_KEY' if provider == 'Gemini' else 'OPENAI_API_KEY'
+    key = os.getenv(setting, '')
     try:
         key = st.secrets.get(setting, key)
     except (FileNotFoundError, KeyError):
         pass
     return key
 
-
 def service():
-    return AIService(
-        credentials(), ss.model, ss.ai_enabled, ss.api_budget, provider=ss.ai_provider
-    )
-
+    return AIService(credentials(), ss.model, ss.ai_enabled, ss.api_budget,
+                     provider=ss.ai_provider)
 
 def change_ai_provider():
     # Copy the temporary widget value into durable session state. Streamlit
     # clears widget-owned keys when navigating to pages that do not draw them.
-    ss.ai_provider = ss.get("_ai_provider_widget", "Gemini")
-    ss.model = (
-        os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
-        if ss.ai_provider == "Gemini"
-        else os.getenv("OPENAI_MODEL", DEFAULT_MODEL)
-    )
+    ss.ai_provider = ss.get('_ai_provider_widget', 'Gemini')
+    ss.model = (os.getenv('GEMINI_MODEL', DEFAULT_GEMINI_MODEL) if ss.ai_provider == 'Gemini'
+                else os.getenv('OPENAI_MODEL', DEFAULT_MODEL))
     ss._ai_model_widget = ss.model
-    ss.pop("ai_result", None)
-    ss.pop("pending_plan", None)
+    ss.pop('ai_result', None)
+    ss.pop('pending_plan', None)
 
 
 def save_ai_model():
     # The model ID needs a separate durable session key, just like consent.
-    ss.model = str(ss.get("_ai_model_widget", ss.model)).strip()
-    ss.pop("ai_result", None)
-    ss.pop("pending_plan", None)
-
+    ss.model = str(ss.get('_ai_model_widget', ss.model)).strip()
+    ss.pop('ai_result', None)
+    ss.pop('pending_plan', None)
 
 def save_ai_consent():
     # Keep the dataset-scoped permission separate from Streamlit's widget state.
     # Streamlit removes widget keys when the widget is not rendered on another page.
-    ss.ai_enabled = bool(ss.get("_ai_consent", False))
-
+    ss.ai_enabled = bool(ss.get('_ai_consent', False))
 
 def change_ai_report_style():
     # Keep presentation choice across page navigation, but invalidate stale reports.
-    ss.ai_report_style = ss.get(
-        "_ai_style_widget", "Evidence-linked brief (recommended)"
-    )
-    ss.pop("ai_result", None)
-    ss.pop("generated_exports", None)
-
+    ss.ai_report_style = ss.get('_ai_style_widget', 'Evidence-linked brief (recommended)')
+    ss.pop('ai_result', None)
+    ss.pop('generated_exports', None)
 
 with st.sidebar:
-    st.markdown(
-        '<div class="brand"><span class="brand-mark" aria-hidden="true">◈</span>InsightAI</div><div class="brand-note">Your data. Clearer decisions.</div>',
-        unsafe_allow_html=True,
-    )
-    with st.expander("Appearance · Light / Dark"):
-        st.write(
-            "Open the ⋮ menu at the top right and choose Light, Dark, or System. System follows your device preference."
-        )
-    with st.container(key="workspace_nav"):
-        page = st.radio(
-            "Workspace",
-            [
-                "Home",
-                "Data Overview",
-                "Data Cleaning",
-                "Dashboard",
-                "AI Insights",
-                "Chat With Your Data",
-                "Reports & Export",
-                "Settings / About",
-            ],
-            key="page",
-            label_visibility="collapsed",
-        )
+    st.markdown('<div class="brand"><span class="brand-mark" aria-hidden="true">◈</span>InsightAI</div><div class="brand-note">Your data. Clearer decisions.</div>', unsafe_allow_html=True)
+    with st.expander('Appearance · Light / Dark'):
+        st.write('Open the ⋮ menu at the top right and choose Light, Dark, or System. System follows your device preference.')
+    with st.container(key='workspace_nav'):
+        page = st.radio('Workspace', ['Home', 'Data Overview', 'Data Cleaning', 'Dashboard', 'Executive Report', 'AI Insights',
+                                      'Chat With Your Data', 'Reports & Export', 'Settings / About'], key='page', label_visibility='collapsed')
     st.divider()
-    upload = st.file_uploader(
-        "Upload CSV or Excel",
-        type=["csv", "xlsx"],
-        help="Up to 15 MB, 100,000 rows, 100 columns, 2 million cells.",
-    )
-    source_choice = st.selectbox(
-        "Sample dataset",
-        ["Sales · original", "Employees · example", "Survey · text only", "None"],
-    )
-    encoding, delimiter = "utf-8-sig", ","
-    if upload and upload.name.lower().endswith(".csv"):
-        with st.expander("CSV options"):
-            encoding = st.selectbox("Encoding", ["utf-8-sig", "cp1252", "latin-1"])
-            delimiter = st.selectbox(
-                "Delimiter",
-                [",", ";", "\t", "|"],
-                format_func=lambda x: "Tab" if x == "\t" else x,
-            )
+    upload = st.file_uploader('Upload CSV or Excel', type=['csv','xlsx'], help='Up to 15 MB, 100,000 rows, 100 columns, 2 million cells.')
+    source_choice = st.selectbox('Sample dataset', ['Sales · original', 'Employees · example', 'Survey · text only', 'None'])
+    encoding, delimiter = 'utf-8-sig', ','
+    if upload and upload.name.lower().endswith('.csv'):
+        with st.expander('CSV options'):
+            encoding = st.selectbox('Encoding', ['utf-8-sig','cp1252','latin-1'])
+            delimiter = st.selectbox('Delimiter', [',',';','\t','|'], format_func=lambda x: 'Tab' if x == '\t' else x)
 
 if upload:
     data, name = upload.getvalue(), upload.name
-elif source_choice != "None":
-    filename = {
-        "Sales · original": "sales.csv",
-        "Employees · example": "employees.csv",
-        "Survey · text only": "survey.csv",
-    }[source_choice]
-    data, name = (ROOT / "sample_data" / filename).read_bytes(), filename
+elif source_choice != 'None':
+    filename = {'Sales · original': 'sales.csv', 'Employees · example': 'employees.csv', 'Survey · text only': 'survey.csv'}[source_choice]
+    data, name = (ROOT / 'sample_data' / filename).read_bytes(), filename
 else:
-    st.title("Start with your data")
-    st.info("Upload a CSV or Excel workbook, or choose a sample in the sidebar.")
+    st.title('Start with your data')
+    st.info('Upload a CSV or Excel workbook, or choose a sample in the sidebar.')
     st.stop()
 sheet = None
 try:
-    if name.lower().endswith(".xlsx"):
+    if name.lower().endswith('.xlsx'):
         file_hash = hashlib.sha256(data).hexdigest()
-        if ss.get("xlsx_hash") != file_hash:
+        if ss.get('xlsx_hash') != file_hash:
             ss.xlsx_sheets = sheet_names(data)
             ss.xlsx_hash = file_hash
         with st.sidebar:
-            sheet = select("Excel sheet", ss.xlsx_sheets, "sheet")
-    dataset_id = hashlib.sha256(
-        data + f"{name}:{sheet}:{encoding}:{delimiter}".encode()
-    ).hexdigest()
-    if ss.get("dataset_id") != dataset_id:
+            sheet = select('Excel sheet', ss.xlsx_sheets, 'sheet')
+    dataset_id = hashlib.sha256(data + f'{name}:{sheet}:{encoding}:{delimiter}'.encode()).hexdigest()
+    if ss.get('dataset_id') != dataset_id:
         original = load_data(data, name, sheet, encoding, delimiter)
         ss.original, ss.current = original, original.copy()
         ss.dataset_id, ss.dataset_name = dataset_id, name
@@ -294,830 +211,543 @@ except DataError as exc:
 nums, cats, dates = numeric_columns(df), category_columns(df), date_columns(df)
 with st.sidebar:
     st.divider()
-    st.markdown("#### Analysis controls")
-    metric = select(
-        "Metric",
-        [None] + nums,
-        "metric",
-        "Revenue_NGN" if "Revenue_NGN" in nums else (nums[0] if nums else None),
-        format_func=lambda x: x or "Record counts only",
-    )
-    group = select(
-        "Breakdown",
-        [None] + cats,
-        "group",
-        "Product" if "Product" in cats else (cats[0] if cats else None),
-        format_func=lambda x: x or "No category breakdown",
-    )
-    unit = st.text_input(
-        "Currency / unit prefix",
-        value="NGN " if metric == "Revenue_NGN" else "",
-        key=f"unit_{metric}",
-        max_chars=12,
-    )
-    st.caption(
-        "Choose metrics carefully: totals of IDs, ages or rates may be inappropriate."
-    )
-    with st.expander("Sales field mapping (optional)"):
-        revenue = select(
-            "Revenue column",
-            [None] + nums,
-            "map_revenue",
-            "Revenue_NGN",
-            format_func=lambda x: x or "Not a sales dataset",
-        )
-        product = select(
-            "Product column",
-            [None] + cats,
-            "map_product",
-            "Product",
-            format_func=lambda x: x or "Not mapped",
-        )
-        region = select(
-            "Region column",
-            [None] + cats,
-            "map_region",
-            "Region",
-            format_func=lambda x: x or "Not mapped",
-        )
-        units = select(
-            "Units column",
-            [None] + nums,
-            "map_units",
-            "Units_Sold",
-            format_func=lambda x: x or "Not mapped",
-        )
-    st.markdown("#### Shared filters")
-    if st.button("Reset filters", width="stretch"):
+    st.markdown('#### Analysis controls')
+    metric = select('Metric', [None] + nums, 'metric', 'Revenue_NGN' if 'Revenue_NGN' in nums else (nums[0] if nums else None), format_func=lambda x: x or 'Record counts only')
+    group = select('Breakdown', [None] + cats, 'group', 'Product' if 'Product' in cats else (cats[0] if cats else None), format_func=lambda x: x or 'No category breakdown')
+    unit = st.text_input('Currency / unit prefix', value='NGN ' if metric == 'Revenue_NGN' else '', key=f'unit_{metric}', max_chars=12)
+    st.caption('Choose metrics carefully: totals of IDs, ages or rates may be inappropriate.')
+    with st.expander('Sales field mapping (optional)'):
+        revenue = select('Revenue column', [None]+nums, 'map_revenue', 'Revenue_NGN', format_func=lambda x: x or 'Not a sales dataset')
+        product = select('Product column', [None]+cats, 'map_product', 'Product', format_func=lambda x: x or 'Not mapped')
+        region = select('Region column', [None]+cats, 'map_region', 'Region', format_func=lambda x: x or 'Not mapped')
+        units = select('Units column', [None]+nums, 'map_units', 'Units_Sold', format_func=lambda x: x or 'Not mapped')
+    st.markdown('#### Shared filters')
+    if st.button('Reset filters', width='stretch'):
         ss.filter_epoch += 1
         st.rerun()
-    prefix = f"f{ss.filter_epoch}_"
-    filter_cols = st.multiselect("Filter columns", cats, key=prefix + "columns")
+    prefix = f'f{ss.filter_epoch}_'
+    filter_cols = st.multiselect('Filter columns', cats, key=prefix+'columns')
     selections = {}
     for c in filter_cols:
         values = sorted(df[c].dropna().astype(str).unique().tolist())
         if len(values) > 500:
-            st.caption(
-                f"{c}: over 500 categories. Enter exact category values below, one per line."
-            )
-            raw = st.text_area(f"{c} values", key=prefix + c)
+            st.caption(f'{c}: over 500 categories. Enter exact category values below, one per line.')
+            raw = st.text_area(f'{c} values', key=prefix+c)
             if raw.strip():
                 selections[c] = raw.splitlines()
         else:
             options = values + ([None] if df[c].isna().any() else [])
-            selections[c] = st.multiselect(
-                c,
-                options,
-                default=options,
-                key=prefix + c,
-                format_func=lambda v: "(Missing)" if v is None else v,
-            )
-    date_filter = select(
-        "Date range column",
-        [None] + dates,
-        prefix + "date",
-        format_func=lambda x: x or "No date filter",
-    )
+            selections[c] = st.multiselect(c, options, default=options, key=prefix+c, format_func=lambda v: '(Missing)' if v is None else v)
+    date_filter = select('Date range column', [None]+dates, prefix+'date', format_func=lambda x: x or 'No date filter')
     start, end, include_missing_dates = None, None, False
     if date_filter and len(df):
         ds = date_series(df[date_filter]).dropna()
         if not ds.empty:
-            selected_range = st.date_input(
-                "Date range",
-                value=(ds.min().date(), ds.max().date()),
-                key=prefix + "range",
-            )
+            selected_range = st.date_input('Date range', value=(ds.min().date(), ds.max().date()), key=prefix+'range')
             if len(selected_range) == 2:
                 start, end = selected_range
             else:
-                st.info("Select both a start and an end date.")
+                st.info('Select both a start and an end date.')
                 st.stop()
-            include_missing_dates = st.checkbox(
-                "Include undated records", key=prefix + "undated"
-            )
-    st.caption(
-        "Filters apply to dashboard, insights, chat and reports. Cleaning always uses the full dataset."
-    )
+            include_missing_dates = st.checkbox('Include undated records', key=prefix+'undated')
+    st.caption('Filters apply to dashboard, insights, chat and reports. Cleaning always uses the full dataset.')
 
 try:
-    filtered = filter_data(
-        df, selections, date_filter, start, end, include_missing_dates
-    )
+    filtered = filter_data(df, selections, date_filter, start, end, include_missing_dates)
 except DataError as exc:
     st.error(str(exc))
     st.stop()
-context = {
-    "Dataset": name,
-    "Sheet": sheet or "N/A",
-    "Dataset fingerprint": dataset_id[:12],
-    "Original rows": len(ss.original),
-    "Cleaned rows": len(df),
-    "Selected rows": len(filtered),
-    "Metric": metric or "Record counts",
-    "Breakdown": group or "None",
-    "Unit prefix": unit or "Unspecified",
-    "Category filters": json.dumps(selections, ensure_ascii=False),
-    "Date filter": (
-        f"{date_filter}: {start} to {end}; include undated={include_missing_dates}"
-        if date_filter
-        else "None"
-    ),
-    "Cleaning revision": ss.data_revision,
-}
-scope_id = hashlib.sha256(
-    json.dumps(context, default=str, sort_keys=True).encode()
-).hexdigest()
-if ss.get("scope_id") != scope_id:
+context = {'Dataset': name, 'Sheet': sheet or 'N/A', 'Dataset fingerprint': dataset_id[:12],
+           'Original rows': len(ss.original), 'Cleaned rows': len(df), 'Selected rows': len(filtered),
+           'Metric': metric or 'Record counts', 'Breakdown': group or 'None', 'Unit prefix': unit or 'Unspecified',
+           'Category filters': json.dumps(selections, ensure_ascii=False),
+           'Date filter': f'{date_filter}: {start} to {end}; include undated={include_missing_dates}' if date_filter else 'None',
+           'Cleaning revision': ss.data_revision}
+scope_id = hashlib.sha256(json.dumps(context, default=str, sort_keys=True).encode()).hexdigest()
+if ss.get('scope_id') != scope_id:
     invalidate()
     ss.scope_id = scope_id
-st.markdown(
-    f"""<div class="workspace-header">
+
+def build_scoped_exports():
+    """Create reports only for this selection; preserve evidence-linked AI scope."""
+    report_date = date_filter if date_filter in dates else (dates[0] if len(dates) == 1 else None)
+    executive = executive_report(filtered, metric=metric, group=group, date=report_date)
+    breakdown = aggregate(filtered, group, metric) if group and metric else None
+    return {
+        'xlsx': excel_bytes(filtered, context, ss.history, breakdown, executive=executive),
+        'pdf': pdf_bytes(filtered, name, context, ss.history, metric, group,
+                         report_date, ss.get('ai_result'), executive=executive),
+    }
+
+st.markdown(f'''<div class="workspace-header">
 <div><div class="workspace-label">INSIGHTAI WORKSPACE</div><div class="workspace-page">{escape(page)}</div></div>
 <div class="dataset-context"><div class="dataset-name">{escape(name)}</div>
 <div class="dataset-stats">{len(filtered):,} selected records · {len(df.columns)} columns · {len(ss.actions)} cleaning steps</div></div>
-</div>""",
-    unsafe_allow_html=True,
-)
+</div>''', unsafe_allow_html=True)
 
-if page == "Home":
-    st.markdown(
-        """<div class="hero"><div class="eyebrow">MEET YOUR DATA, PROPERLY.</div>
+if page == 'Home':
+    st.markdown('''<div class="hero"><div class="eyebrow">MEET YOUR DATA, PROPERLY.</div>
     <h1>From rows to a clearer picture.</h1><p>Explore, clean and understand your data in one workspace.
-    Every number calculated. Every change in your control.</p></div>""",
-        unsafe_allow_html=True,
-    )
-    a, b, c, d = st.columns(4)
-    a.metric("Records loaded", f"{len(df):,}")
-    b.metric("Fields to explore", len(df.columns))
-    c.metric("Missing cells", f"{int(df.isna().sum().sum()):,}")
-    d.metric("Duplicate rows", f"{int(df.duplicated().sum()):,}")
-    st.markdown("### A practical path to insight")
-    for col, title, text in zip(
-        st.columns(3),
-        ["01 · Understand", "02 · Refine", "03 · Explain"],
-        [
-            "Check the overview: types, missing values and unusual observations.",
-            "Preview a cleaning change, apply it, and undo it whenever needed.",
-            "Filter your dashboard, ask a question and export the evidence.",
-        ],
-    ):
+    Every number calculated. Every change in your control.</p></div>''', unsafe_allow_html=True)
+    a,b,c,d = st.columns(4)
+    a.metric('Records loaded', f'{len(df):,}')
+    b.metric('Fields to explore', len(df.columns))
+    c.metric('Missing cells', f'{int(df.isna().sum().sum()):,}')
+    d.metric('Duplicate rows', f'{int(df.duplicated().sum()):,}')
+    st.markdown('### A practical path to insight')
+    for col, title, text in zip(st.columns(3), ['01 · Understand','02 · Refine','03 · Explain'],
+        ['Check the overview: types, missing values and unusual observations.',
+         'Preview a cleaning change, apply it, and undo it whenever needed.',
+         'Filter your dashboard, ask a question and export the evidence.']):
         with col:
             with st.container(border=True):
                 st.subheader(title)
                 st.write(text)
-    st.markdown("### Your working data")
-    st.dataframe(df.head(12), hide_index=True, width="stretch")
-    st.info(
-        "Start with Data Overview in the sidebar. External AI is optional and disabled until you enable it for this dataset."
-    )
+    st.markdown('### Your working data')
+    st.dataframe(df.head(12), hide_index=True, width='stretch')
+    st.info('Start with Data Overview in the sidebar. External AI is optional and disabled until you enable it for this dataset.')
 
-elif page == "Data Overview":
-    st.title("Know what you’re working with")
-    st.write(
-        "This profile describes the full working dataset before dashboard filters."
-    )
-    st.dataframe(profile(df), hide_index=True, width="stretch")
-    st.caption(
-        "IQR flags are candidates for review, not automatic errors. Mixed-type hints do not change your data."
-    )
-    tab1, tab2, tab3 = st.tabs(
-        ["Preview", "Numeric statistics", "Category frequencies"]
-    )
+elif page == 'Data Overview':
+    st.title('Know what you’re working with')
+    st.write('This profile describes the full working dataset before dashboard filters.')
+    st.dataframe(profile(df), hide_index=True, width='stretch')
+    st.caption('IQR flags are candidates for review, not automatic errors. Mixed-type hints do not change your data.')
+    tab1, tab2, tab3 = st.tabs(['Preview', 'Numeric statistics', 'Category frequencies'])
     with tab1:
-        preview_rows = st.slider("Preview rows", 5, 500, 25)
-        st.dataframe(df.head(preview_rows), hide_index=True, width="stretch")
+        preview_rows = st.slider('Preview rows', 5, 500, 25)
+        st.dataframe(df.head(preview_rows), hide_index=True, width='stretch')
     with tab2:
         if nums:
-            st.dataframe(df[nums].describe().T, width="stretch")
-            st.caption(
-                "Mean = recorded total / recorded count. Median = middle value. Std = sample standard deviation. Missing values are excluded."
-            )
+            st.dataframe(df[nums].describe().T, width='stretch')
+            st.caption('Mean = recorded total / recorded count. Median = middle value. Std = sample standard deviation. Missing values are excluded.')
         else:
-            st.info(
-                "No numeric columns. You can still explore categories and missing values."
-            )
+            st.info('No numeric columns. You can still explore categories and missing values.')
     with tab3:
-        cat = select("Category to inspect", cats, "overview_cat")
+        cat = select('Category to inspect', cats, 'overview_cat')
         if cat:
-            st.dataframe(
-                aggregate(df, cat, None, "count")
-                .sort_values("Value", ascending=False)
-                .head(100),
-                hide_index=True,
-            )
-            st.caption("Up to 100 most frequent categories. Value means record count.")
+            st.dataframe(aggregate(df, cat, None, 'count').sort_values('Value', ascending=False).head(100), hide_index=True)
+            st.caption('Up to 100 most frequent categories. Value means record count.')
 
-elif page == "Data Cleaning":
-    st.title("Clean with confidence")
-    st.write(
-        "Changes affect a working copy. Your original file stays unchanged. Filters do not remove records here."
-    )
-    c1, c2, c3 = st.columns(3)
-    if c1.button("Undo last step", disabled=not ss.actions, width="stretch"):
+elif page == 'Data Cleaning':
+    st.title('Clean with confidence')
+    st.write('Changes affect a working copy. Your original file stays unchanged. Filters do not remove records here.')
+    c1,c2,c3 = st.columns(3)
+    if c1.button('Undo last step', disabled=not ss.actions, width='stretch'):
         change_data(ss.actions[:-1])
-    if c2.button("Reset to original", disabled=not ss.actions, width="stretch"):
+    if c2.button('Reset to original', disabled=not ss.actions, width='stretch'):
         change_data([])
-    c3.metric("Steps applied", len(ss.actions))
-    operation = st.selectbox("Cleaning action", OPERATIONS)
-    columns = st.multiselect(
-        "Columns to change",
-        list(df.columns),
-        disabled=operation in ("Remove duplicate rows", "Standardize column names"),
-    )
-    action = {"operation": operation, "columns": columns}
-    if operation == "Convert to number":
-        action["strip_commas"] = st.checkbox(
-            "Commas are thousands separators", value=False
-        )
-        action["currency_symbol"] = st.text_input(
-            "Currency symbol to remove (optional)", max_chars=10
-        )
-    if operation == "Convert to date":
-        action["date_format"] = st.selectbox(
-            "Source date format",
-            ["%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%b-%Y", "%Y-%m-%d %H:%M:%S"],
-        )
-        st.caption(
-            "For example, 15/11/2026 uses %d/%m/%Y. Dates are stored as datetime values, displayed in ISO form."
-        )
-    if operation.startswith("Convert"):
-        action["allow_invalid"] = st.checkbox(
-            "I allow values that fail conversion to become missing"
-        )
-    if operation.startswith("Fill numeric"):
-        st.warning(
-            "Imputation changes the analysis. Confirm that replacing these values with a mean/median makes sense, especially for money. Missing amounts are never automatically filled with zero."
-        )
+    c3.metric('Steps applied', len(ss.actions))
+    operation = st.selectbox('Cleaning action', OPERATIONS)
+    columns = st.multiselect('Columns to change', list(df.columns), disabled=operation in ('Remove duplicate rows','Standardize column names'))
+    action = {'operation':operation, 'columns':columns}
+    if operation == 'Convert to number':
+        action['strip_commas'] = st.checkbox('Commas are thousands separators', value=False)
+        action['currency_symbol'] = st.text_input('Currency symbol to remove (optional)', max_chars=10)
+    if operation == 'Convert to date':
+        action['date_format'] = st.selectbox('Source date format', ['%Y-%m-%d','%d/%m/%Y','%m/%d/%Y','%d-%b-%Y','%Y-%m-%d %H:%M:%S'])
+        st.caption('For example, 15/11/2026 uses %d/%m/%Y. Dates are stored as datetime values, displayed in ISO form.')
+    if operation.startswith('Convert'):
+        action['allow_invalid'] = st.checkbox('I allow values that fail conversion to become missing')
+    if operation.startswith('Fill numeric'):
+        st.warning('Imputation changes the analysis. Confirm that replacing these values with a mean/median makes sense, especially for money. Missing amounts are never automatically filled with zero.')
     try:
         preview, changes = clean(df, action)
-        st.markdown("#### Preview this change")
+        st.markdown('#### Preview this change')
         st.json(changes, expanded=True)
-        left, right = st.columns(2)
-        left.write("Before · first 10 rows")
+        left,right = st.columns(2)
+        left.write('Before · first 10 rows')
         left.dataframe(df.head(10), hide_index=True)
-        right.write("After · first 10 rows")
+        right.write('After · first 10 rows')
         right.dataframe(preview.head(10), hide_index=True)
-        if st.button(
-            "Apply this change", type="primary", disabled=len(ss.actions) >= 50
-        ):
+        if st.button('Apply this change', type='primary', disabled=len(ss.actions)>=50):
             change_data(ss.actions + [action])
-        if len(ss.actions) >= 50:
-            st.info(
-                "Session limit: 50 cleaning steps. Undo a step or reset to continue."
-            )
+        if len(ss.actions)>=50:
+            st.info('Session limit: 50 cleaning steps. Undo a step or reset to continue.')
     except DataError as exc:
         st.info(str(exc))
     if ss.history:
-        st.markdown("#### Applied cleaning history")
-        st.dataframe(pd.DataFrame(ss.history), hide_index=True, width="stretch")
-    st.download_button(
-        "Download full cleaned CSV", csv_bytes(df), "insightai_cleaned.csv", "text/csv"
-    )
+        st.markdown('#### Applied cleaning history')
+        st.dataframe(pd.DataFrame(ss.history), hide_index=True, width='stretch')
+    st.download_button('Download full cleaned CSV', csv_bytes(df), 'insightai_cleaned.csv', 'text/csv')
 
-elif page == "Dashboard":
-    st.title("The story in your numbers")
-    st.write(
-        "Use the shared sidebar controls to keep cards, charts and exported findings in the same scope."
-    )
+elif page == 'Dashboard':
+    st.title('The story in your numbers')
+    st.write('Use the shared sidebar controls to keep cards, charts and exported findings in the same scope.')
     values = kpis(filtered, metric)
-    a, b, c, d = st.columns(4)
-    a.metric("Selected records", values["records"])
+    a,b,c,d = st.columns(4)
+    a.metric('Selected records', values['records'])
     if metric:
-        b.metric(f"Recorded total · {metric}", format_value(values["total"], unit))
-        c.metric("Recorded mean", format_value(values["average"], unit))
-        d.metric("Missing metric values", values["missing"])
-        st.caption(
-            f'Based on {values["recorded"]:,} recorded {metric} values. A row is a record; it is only a transaction if your dataset defines it that way.'
-        )
+        b.metric(f'Recorded total · {metric}', format_value(values['total'],unit))
+        c.metric('Recorded mean', format_value(values['average'],unit))
+        d.metric('Missing metric values', values['missing'])
+        st.caption(f'Based on {values["recorded"]:,} recorded {metric} values. A row is a record; it is only a transaction if your dataset defines it that way.')
     else:
-        b.metric("Missing cells", values["missing_cells"])
-        c.metric("Duplicate rows", values["duplicate_rows"])
-        d.metric("Fields", len(filtered.columns))
+        b.metric('Missing cells', values['missing_cells'])
+        c.metric('Duplicate rows', values['duplicate_rows'])
+        d.metric('Fields', len(filtered.columns))
     if revenue and metric == revenue:
-        with st.expander("Mapped sales summary", expanded=True):
-            s1, s2, s3 = st.columns(3)
-            for col, field, label in (
-                (s1, product, "Leading product"),
-                (s2, region, "Leading region"),
-            ):
+        with st.expander('Mapped sales summary', expanded=True):
+            s1,s2,s3 = st.columns(3)
+            for col, field, label in ((s1,product,'Leading product'),(s2,region,'Leading region')):
                 if field and len(filtered):
-                    breakdown = (
-                        aggregate(filtered, field, revenue)
-                        .dropna(subset=["Value"])
-                        .sort_values("Value", ascending=False)
-                    )
+                    breakdown = aggregate(filtered,field,revenue).dropna(subset=['Value']).sort_values('Value',ascending=False)
                     if not breakdown.empty:
-                        col.metric(label, str(breakdown.iloc[0].Group))
+                        col.metric(label,str(breakdown.iloc[0].Group))
             if units:
-                s3.metric(
-                    "Recorded units", format_value(kpis(filtered, units)["total"])
-                )
-            st.caption(
-                "Revenue is recorded revenue, not profit. Mapped fields can be changed in the sidebar."
-            )
+                s3.metric('Recorded units', format_value(kpis(filtered,units)['total']))
+            st.caption('Revenue is recorded revenue, not profit. Mapped fields can be changed in the sidebar.')
     if filtered.empty:
-        st.info("No records match the filters. Reset or widen them to continue.")
+        st.info('No records match the filters. Reset or widen them to continue.')
     else:
-        c1, c2, c3 = st.columns(3)
-        kind = c1.selectbox("Chart type", CHARTS)
-        operation = c2.selectbox(
-            "Aggregation",
-            ["sum", "mean", "median", "min", "max", "count"],
-            help="Count means number of records, not nonmissing metric values.",
-        )
-        limit = c3.slider("Categories to display", 1, 50, 15)
-        ascending = st.checkbox("Sort smallest first")
+        c1,c2,c3 = st.columns(3)
+        kind = c1.selectbox('Chart type', CHARTS)
+        operation = c2.selectbox('Aggregation', ['sum','mean','median','min','max','count'], help='Count means number of records, not nonmissing metric values.')
+        limit = c3.slider('Categories to display', 1, 50, 15)
+        ascending = st.checkbox('Sort smallest first')
         chart_group = group
         second = None
-        if kind in ("Line", "Area"):
-            chart_group = select("Time axis", dates, "chart_date")
-        if kind == "Scatter":
-            second = select(
-                "Second numeric column", nums, "second", nums[-1] if nums else None
-            )
+        if kind in ('Line','Area'):
+            chart_group = select('Time axis',dates,'chart_date')
+        if kind == 'Scatter':
+            second = select('Second numeric column',nums,'second',nums[-1] if nums else None)
         try:
-            fig, table = build_chart(
-                filtered, kind, metric, chart_group, second, operation, limit, ascending
-            )
+            fig, table = build_chart(filtered,kind,metric,chart_group,second,operation,limit,ascending)
             # A normal heading wraps on narrow screens; Plotly titles do not.
             st.subheader(fig.layout.title.text)
-            fig.update_layout(
-                title_text="",
-                autosize=True,
-                margin=dict(l=16, r=16, t=24, b=40),
-                legend=dict(orientation="h", yanchor="top", y=-0.25, x=0),
-            )
-            st.plotly_chart(
-                fig,
-                width="stretch",
-                config={
-                    "responsive": True,
-                    "scrollZoom": False,
-                    "displaylogo": False,
-                    "toImageButtonOptions": {
-                        "format": "png",
-                        "filename": "insightai_chart",
-                    },
-                },
-            )
-            ss.last_chart = {"table": table, "kind": kind}
-            st.caption(
-                "Download a chart PNG using the camera icon. Hover for values. Distribution/scatter/box charts show up to the first 10,000 filtered rows; aggregate charts use all selected records."
-            )
-            with st.expander("Inspect the chart data"):
-                st.dataframe(table, width="stretch")
-            st.download_button(
-                "Download chart data",
-                csv_bytes(table.reset_index() if kind == "Correlation" else table),
-                "insightai_chart.csv",
-                "text/csv",
-            )
+            fig.update_layout(title_text='', autosize=True, margin=dict(l=16,r=16,t=24,b=40),
+                              legend=dict(orientation='h',yanchor='top',y=-.25,x=0))
+            st.plotly_chart(fig, width='stretch', config={'responsive':True,'scrollZoom':False,'displaylogo':False,'toImageButtonOptions':{'format':'png','filename':'insightai_chart'}})
+            ss.last_chart = {'table':table, 'kind':kind}
+            st.caption('Download a chart PNG using the camera icon. Hover for values. Distribution/scatter/box charts show up to the first 10,000 filtered rows; aggregate charts use all selected records.')
+            with st.expander('Inspect the chart data'):
+                st.dataframe(table, width='stretch')
+            st.download_button('Download chart data', csv_bytes(table.reset_index() if kind=='Correlation' else table), 'insightai_chart.csv','text/csv')
         except DataError as exc:
             st.info(str(exc))
 
-elif page == "AI Insights":
-    st.title("Evidence first. Interpretation second.")
-    insight_date = (
-        date_filter if date_filter in dates else (dates[0] if len(dates) == 1 else None)
-    )
+elif page == 'Executive Report':
+    st.title('Executive performance briefing')
+    st.caption('Decision-ready observations, not AI-generated numbers. Everything here uses the selected records and shared filters.')
+    report_date = date_filter if date_filter in dates else (dates[0] if len(dates) == 1 else None)
+    briefing = executive_report(filtered, metric=metric, group=group, date=report_date)
+
+    st.markdown('### Performance at a glance')
+    cards = briefing['cards']
+    for col, card in zip(st.columns(len(cards)), cards):
+        val = format_value(card['value'], unit) if card['kind'] == 'metric' else f"{card['value']:,}"
+        col.metric(card['label'], val, help=card['note'])
+    with st.expander('Scope and measurement notes'):
+        st.json(context, expanded=False)
+        for card in cards:
+            st.caption(f"{card['label']}: {card['note']}")
+
+    st.markdown('### The key observations')
+    for text in briefing['headlines']:
+        st.write('• ' + text)
+
+    category_rows, period_rows = briefing['category_rows'], briefing['period_rows']
+    left, right = st.columns(2)
+    with left:
+        st.markdown('#### Leading categories')
+        if category_rows:
+            top = category_rows[:8][::-1]
+            shares = all(item['contribution_pct'] is not None for item in top)
+            values = [item['contribution_pct'] if shares else item['total'] for item in top]
+            chart_title = 'Share of recorded total (%)' if shares else f'Recorded total · {metric}'
+            fig = go.Figure(go.Bar(x=values, y=[item['category'] for item in top],
+                                   orientation='h', marker_color='#0d9488'))
+            fig.update_layout(xaxis_title=chart_title, yaxis_title='',
+                              margin=dict(l=10,r=20,t=10,b=35),height=310)
+            if shares:
+                fig.update_xaxes(range=[0, max(100, max(values, default=0) * 1.1)])
+            st.plotly_chart(fig, width='stretch', config={'displaylogo': False, 'scrollZoom': False})
+            st.caption(briefing['category_note'] or 'Recorded category totals.')
+        else:
+            st.info('Choose a numeric metric and breakdown to see category performance.')
+    with right:
+        st.markdown('#### Calendar-month evidence')
+        if period_rows:
+            fig = go.Figure(go.Scatter(
+                x=[r['month'] for r in period_rows],
+                y=[r['total'] for r in period_rows],
+                mode='lines+markers', connectgaps=False,
+                line=dict(color='#0d9488',width=3), marker=dict(size=7)))
+            fig.update_layout(xaxis_title='Calendar month', yaxis_title=f'Recorded {metric}',
+                              margin=dict(l=20,r=20,t=10,b=35),height=310)
+            st.plotly_chart(fig, width='stretch', config={'displaylogo': False, 'scrollZoom': False})
+            st.caption(briefing['period_note'])
+            st.caption('Gaps are not filled with zero or connected across missing months.')
+        else:
+            st.info('Choose a numeric metric and a recognized date field to see calendar-month evidence.')
+
+    st.markdown('### Prioritized review actions')
+    st.caption('These are rule-based suggestions for investigation—not statistical significance, forecasts or proven business risks.')
+    for action in briefing['actions']:
+        with st.container(border=True):
+            st.markdown(f"**{action['priority']} review priority · {action['title']}**")
+            st.caption('Verified basis: ' + action['evidence'])
+            st.write('**Suggested next step:** ' + action['next_step'])
+
+    if ss.get('ai_result'):
+        st.markdown('### Optional AI interpretation from this selection')
+        st.caption('The following is model-generated interpretation. Review separately from Python-calculated results.')
+        st.write(ss.ai_result['executive_summary'])
+        if ss.ai_result.get('insights'):
+            for item in ss.ai_result['insights']:
+                st.write(f"**Evidence {item['evidence_id']} · {item['priority']} suggested AI priority:** {item['recommended_next_step']}")
+        else:
+            for text in ss.ai_result.get('recommendations', []):
+                st.write('• ' + text)
+    else:
+        st.caption('No AI briefing in this selection. The executive report works without Gemini or OpenAI.')
+    with st.expander('Assumptions and limitations', expanded=True):
+        for caution in briefing['cautions']:
+            st.caption('• ' + caution)
+
+    st.markdown('### Download decision-ready reports')
+    if st.button('Build executive report files', type='primary'):
+        with st.spinner('Preparing scoped Excel and PDF reports…'):
+            try:
+                ss.generated_exports = build_scoped_exports()
+            except Exception:
+                st.error('Executive export failed; existing CSV exports remain available.')
+    if ss.get('generated_exports'):
+        ex1, ex2 = st.columns(2)
+        ex1.download_button('Download executive Excel', ss.generated_exports['xlsx'],
+                            'insightai_executive.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                            width='stretch')
+        ex2.download_button('Download executive PDF', ss.generated_exports['pdf'],
+                            'insightai_executive.pdf', 'application/pdf', width='stretch')
+
+elif page == 'AI Insights':
+    st.title('Evidence first. Interpretation second.')
+    insight_date = date_filter if date_filter in dates else (dates[0] if len(dates) == 1 else None)
     advanced = advanced_report(filtered, metric=metric, group=group, date=insight_date)
     basic = facts(filtered, metric, group, insight_date)
     verified = basic + extra_facts(advanced, next_id=len(basic) + 1)
-    st.caption(
-        "All calculated evidence is generated locally from the currently filtered dataset. AI is optional."
-    )
-    with st.expander("Analytical scorecard · calculated in Python", expanded=True):
-        quality = advanced["quality"]
+    st.caption('All calculated evidence is generated locally from the currently filtered dataset. AI is optional.')
+    with st.expander('Analytical scorecard · calculated in Python', expanded=True):
+        quality = advanced['quality']
         k1, k2, k3, k4 = st.columns(4)
-        k1.metric("Filtered records", f'{quality["rows"]:,}')
-        k2.metric("Missing cells", f'{quality["missing_cells"]:,}')
-        k3.metric("Records with missing values", f'{quality["rows_with_missing"]:,}')
-        k4.metric("Duplicate rows", f'{quality["duplicate_rows"]:,}')
-        if quality["missing_by_column"]:
-            st.caption("Columns requiring missing-value review")
-            quality_table = pd.DataFrame(
-                [
-                    {
-                        "Column": x["column"],
-                        "Missing cells": x["missing"],
-                        "Missing (%)": (
-                            round(x["pct"], 2) if x["pct"] is not None else None
-                        ),
-                    }
-                    for x in quality["missing_by_column"][:10]
-                ]
-            )
-            st.dataframe(quality_table, hide_index=True, width="stretch")
-        categories = advanced["categories"]
-        if categories and categories["top"]:
-            st.markdown("**Top categories by recorded metric total**")
-            category_table = pd.DataFrame(
-                [
-                    {
-                        "Category": r["category"],
-                        "Records": r["records"],
-                        f"Recorded {metric}": round(r["total"], 2),
-                        "Contribution (%)": (
-                            round(r["contribution_pct"], 2)
-                            if r["contribution_pct"] is not None
-                            else None
-                        ),
-                    }
-                    for r in categories["top"]
-                ]
-            )
-            st.dataframe(category_table, hide_index=True, width="stretch")
-            st.caption(
-                categories["share_note"]
-                + " Missing-only categories are excluded from rankings."
-            )
-        periods = advanced["periods"]
-        if periods and periods["comparison"]:
-            comparison = periods["comparison"]
-            st.markdown("**Last two calendar months · recorded metric**")
+        k1.metric('Filtered records', f'{quality["rows"]:,}')
+        k2.metric('Missing cells', f'{quality["missing_cells"]:,}')
+        k3.metric('Records with missing values', f'{quality["rows_with_missing"]:,}')
+        k4.metric('Duplicate rows', f'{quality["duplicate_rows"]:,}')
+        if quality['missing_by_column']:
+            st.caption('Columns requiring missing-value review')
+            quality_table = pd.DataFrame([
+                {'Column': x['column'], 'Missing cells': x['missing'],
+                 'Missing (%)': round(x['pct'], 2) if x['pct'] is not None else None}
+                for x in quality['missing_by_column'][:10]])
+            st.dataframe(quality_table, hide_index=True, width='stretch')
+        categories = advanced['categories']
+        if categories and categories['top']:
+            st.markdown('**Top categories by recorded metric total**')
+            category_table = pd.DataFrame([
+                {'Category': r['category'], 'Records': r['records'],
+                 f'Recorded {metric}': round(r['total'], 2),
+                 'Contribution (%)': round(r['contribution_pct'], 2)
+                                     if r['contribution_pct'] is not None else None}
+                for r in categories['top']])
+            st.dataframe(category_table, hide_index=True, width='stretch')
+            st.caption(categories['share_note'] + ' Missing-only categories are excluded from rankings.')
+        periods = advanced['periods']
+        if periods and periods['comparison']:
+            comparison = periods['comparison']
+            st.markdown('**Last two calendar months · recorded metric**')
             a, b = st.columns(2)
-            a.metric(
-                comparison["previous_month"],
-                format_value(comparison["previous_total"], unit),
-            )
-            b.metric(
-                comparison["current_month"],
-                format_value(comparison["current_total"], unit),
-                delta=(
-                    f'{comparison["percentage_change"]:+.2f}% vs previous month'
-                    if comparison["percentage_change"] is not None
-                    else None
-                ),
-            )
-            st.write(
-                f'Absolute change: {format_value(comparison["absolute_change"], unit)}'
-            )
-            st.caption(periods["caution"])
+            a.metric(comparison['previous_month'], format_value(comparison['previous_total'], unit))
+            b.metric(comparison['current_month'], format_value(comparison['current_total'], unit),
+                     delta=(f'{comparison["percentage_change"]:+.2f}% vs previous month'
+                            if comparison['percentage_change'] is not None else None))
+            st.write(f'Absolute change: {format_value(comparison["absolute_change"], unit)}')
+            st.caption(periods['caution'])
         elif periods:
-            st.caption(
-                "A period comparison requires two consecutive calendar months with recorded values."
-            )
-        if advanced["outliers"] and advanced["outliers"]["flagged"]:
-            out = advanced["outliers"]
-            st.warning(
-                f'{out["flagged"]:,} potential {metric} outliers flagged by the IQR rule. '
-                "This is a review prompt, not proof that values are incorrect; groups may have different typical amounts."
-            )
-    st.markdown("### Verified findings")
+            st.caption('A period comparison requires two consecutive calendar months with recorded values.')
+        if advanced['outliers'] and advanced['outliers']['flagged']:
+            out = advanced['outliers']
+            st.warning(f'{out["flagged"]:,} potential {metric} outliers flagged by the IQR rule. '
+                       'This is a review prompt, not proof that values are incorrect; groups may have different typical amounts.')
+    st.markdown('### Verified findings')
     for fact in verified:
         with st.container(border=True):
-            st.caption(fact["id"] + " · CALCULATED FINDING")
-            st.write(fact["text"])
-    st.markdown("### Optional AI commentary")
-    st.caption(
-        "AI receives only the verified findings displayed above, not raw dataset rows. "
-        "Interpretations and suggested actions require human review."
-    )
-    st.caption(f"AI provider: {ss.ai_provider} · Model: {ss.model}")
+            st.caption(fact['id'] + ' · CALCULATED FINDING')
+            st.write(fact['text'])
+    st.markdown('### Optional AI commentary')
+    st.caption('AI receives only the verified findings displayed above, not raw dataset rows. '
+               'Interpretations and suggested actions require human review.')
+    st.caption(f'AI provider: {ss.ai_provider} · Model: {ss.model}')
     ss._ai_style_widget = ss.ai_report_style
-    report_style = st.radio(
-        "Commentary style",
-        ["Evidence-linked brief (recommended)", "Classic commentary"],
-        key="_ai_style_widget",
-        on_change=change_ai_report_style,
-        horizontal=True,
-        help="The new brief attaches exact Python-computed evidence to each qualitative recommendation. "
-        "Classic keeps the previously working Gemini response format.",
-    )
+    report_style = st.radio('Commentary style',
+                            ['Evidence-linked brief (recommended)', 'Classic commentary'],
+                            key='_ai_style_widget', on_change=change_ai_report_style,
+                            horizontal=True,
+                            help='The new brief attaches exact Python-computed evidence to each qualitative recommendation. '
+                                 'Classic keeps the previously working Gemini response format.')
     if not ss.ai_enabled:
-        st.info(
-            "Enable external processing in Settings / About to request an explanation. These calculated findings work without an API key."
-        )
-    if st.button(
-        "Generate AI commentary", disabled=not ss.ai_enabled or filtered.empty
-    ):
-        with st.spinner("Interpreting the verified findings…"):
+        st.info('Enable external processing in Settings / About to request an explanation. These calculated findings work without an API key.')
+    if st.button('Generate AI commentary', disabled=not ss.ai_enabled or filtered.empty):
+        with st.spinner('Interpreting the verified findings…'):
             try:
                 analyzer = service()
-                ss.ai_result = (
-                    analyzer.explain_linked(verified)
-                    if report_style.startswith("Evidence-linked")
-                    else analyzer.explain(verified)
-                )
-                ss.pop("generated_exports", None)
+                ss.ai_result = (analyzer.explain_linked(verified)
+                                if report_style.startswith('Evidence-linked')
+                                else analyzer.explain(verified))
+                ss.pop('generated_exports', None)
             except DataError as exc:
-                ss.pop("ai_result", None)
+                ss.pop('ai_result', None)
                 st.warning(str(exc))
-    if ss.get("ai_result"):
+    if ss.get('ai_result'):
         result = ss.ai_result
-        st.markdown("#### Executive summary")
-        st.write(result["executive_summary"])
-        if result.get("insights"):
-            st.markdown("#### Evidence-linked insights and next steps")
-            st.caption(
-                "Numbers and finding text below come from Python calculations. "
-                "Implications, priorities, hypotheses and recommended actions are AI suggestions."
-            )
-            for item in result["insights"]:
+        st.markdown('#### Executive summary')
+        st.write(result['executive_summary'])
+        if result.get('insights'):
+            st.markdown('#### Evidence-linked insights and next steps')
+            st.caption('Numbers and finding text below come from Python calculations. '
+                       'Implications, priorities, hypotheses and recommended actions are AI suggestions.')
+            for item in result['insights']:
                 with st.container(border=True):
-                    st.markdown(
-                        f"**{item['priority']} suggested priority · Evidence {item['evidence_id']}**"
-                    )
-                    st.markdown("**Verified finding**")
-                    st.write(item["verified_finding"])
-                    st.markdown("**Possible business implication**")
-                    st.write(item["business_implication"])
-                    st.markdown("**Recommended next step**")
-                    st.write(item["recommended_next_step"])
-                    st.caption(
-                        "Hypothesis to investigate: " + item["hypothesis_to_test"]
-                    )
+                    st.markdown(f"**{item['priority']} suggested priority · Evidence {item['evidence_id']}**")
+                    st.markdown('**Verified finding**')
+                    st.write(item['verified_finding'])
+                    st.markdown('**Possible business implication**')
+                    st.write(item['business_implication'])
+                    st.markdown('**Recommended next step**')
+                    st.write(item['recommended_next_step'])
+                    st.caption('Hypothesis to investigate: ' + item['hypothesis_to_test'])
         else:
-            st.caption("References: " + ", ".join(result["evidence_ids"]))
-            for field in ("hypotheses_to_investigate", "recommendations"):
-                st.markdown("#### " + field.replace("_", " ").title())
+            st.caption('References: ' + ', '.join(result['evidence_ids']))
+            for field in ('hypotheses_to_investigate', 'recommendations'):
+                st.markdown('#### ' + field.replace('_', ' ').title())
                 for text in result[field]:
-                    st.write("• " + text)
-        st.markdown("#### Limitations")
-        for text in result["limitations"]:
-            st.write("• " + text)
+                    st.write('• ' + text)
+        st.markdown('#### Limitations')
+        for text in result['limitations']:
+            st.write('• ' + text)
 
-elif page == "Chat With Your Data":
-    st.title("Ask your data")
-    st.caption(
-        "Answers use the current filters and selected metric. Changing the dataset, cleaning, metric or filters clears this conversation to prevent stale answers."
-    )
-    st.info(
-        "Try “Which product generated the most revenue?”, “What percentage of revenue comes from Laptop?”, “How many records are missing information?” or “Compare 2026-01 and 2026-02”."
-    )
-    if st.button("Clear chat history"):
+elif page == 'Chat With Your Data':
+    st.title('Ask your data')
+    st.caption('Answers use the current filters and selected metric. Changing the dataset, cleaning, metric or filters clears this conversation to prevent stale answers.')
+    st.info('Try “Which product generated the most revenue?”, “What percentage of revenue comes from Laptop?”, “How many records are missing information?” or “Compare 2026-01 and 2026-02”.')
+    if st.button('Clear chat history'):
         ss.messages = []
-        ss.pop("previous_plan", None)
-        ss.pop("pending_plan", None)
+        ss.pop('previous_plan',None)
+        ss.pop('pending_plan',None)
         st.rerun()
-
     def save_result(result, question):
-        ss.messages.extend(
-            [
-                {"role": "user", "text": question},
-                {
-                    "role": "assistant",
-                    "text": result["answer"],
-                    "table": result["table"],
-                    "plan": result["plan"],
-                    "records": result["records"],
-                },
-            ]
-        )
+        ss.messages.extend([{'role':'user','text':question},{'role':'assistant','text':result['answer'],'table':result['table'],'plan':result['plan'],'records':result['records']}])
         ss.messages = ss.messages[-30:]
-        ss.previous_plan = result["plan"]
-
+        ss.previous_plan = result['plan']
     for message in ss.messages:
-        with st.chat_message(message["role"]):
-            st.write(message["text"])
-            if message.get("table") is not None:
-                st.dataframe(message["table"], hide_index=True, width="stretch")
-            if "plan" in message:
-                with st.expander("Calculation and scope"):
-                    st.caption(
-                        f'{message["records"]} records after question-specific filters.'
-                    )
-                    st.json(message["plan"])
-    with st.expander("Structured question form · precise local control"):
-        form_op = st.selectbox(
-            "Calculation",
-            [
-                "summary",
-                "missing",
-                "aggregate",
-                "group",
-                "share",
-                "correlation",
-                "trend",
-                "compare",
-            ],
-        )
-        form_agg = st.selectbox(
-            "Calculation method", ["sum", "mean", "median", "min", "max", "count"]
-        )
-        form_category = st.text_input("Exact category (for share)")
-        form_date = select(
-            "Date field (for trend / compare)",
-            [None] + dates,
-            "form_date",
-            dates[0] if dates else None,
-        )
-        form_periods = st.text_input(
-            "Two months (for compare)", placeholder="2026-01,2026-02"
-        )
-        form_limit = st.number_input("Maximum result categories", 1, 50, 5)
-        if st.button("Run local calculation"):
+        with st.chat_message(message['role']):
+            st.write(message['text'])
+            if message.get('table') is not None:
+                st.dataframe(message['table'],hide_index=True,width='stretch')
+            if 'plan' in message:
+                with st.expander('Calculation and scope'):
+                    st.caption(f'{message["records"]} records after question-specific filters.')
+                    st.json(message['plan'])
+    with st.expander('Structured question form · precise local control'):
+        form_op = st.selectbox('Calculation',['summary','missing','aggregate','group','share','correlation','trend','compare'])
+        form_agg = st.selectbox('Calculation method',['sum','mean','median','min','max','count'])
+        form_category = st.text_input('Exact category (for share)')
+        form_date = select('Date field (for trend / compare)',[None]+dates,'form_date',dates[0] if dates else None)
+        form_periods = st.text_input('Two months (for compare)',placeholder='2026-01,2026-02')
+        form_limit = st.number_input('Maximum result categories',1,50,5)
+        if st.button('Run local calculation'):
             try:
-                plan = make_plan(
-                    operation=form_op,
-                    metric=metric,
-                    group=group,
-                    aggregation=form_agg,
-                    category=form_category or None,
-                    date=form_date,
-                    limit=int(form_limit),
-                    periods=[p.strip() for p in form_periods.split(",") if p.strip()],
-                )
-                save_result(
-                    execute_plan(filtered, plan),
-                    f'{form_op}: {metric or "records"} / {group or "all"}',
-                )
+                plan = make_plan(operation=form_op,metric=metric,group=group,aggregation=form_agg,
+                                 category=form_category or None,date=form_date,limit=int(form_limit),
+                                 periods=[p.strip() for p in form_periods.split(',') if p.strip()])
+                save_result(execute_plan(filtered,plan),f'{form_op}: {metric or "records"} / {group or "all"}')
                 st.rerun()
-            except (DataError, ValidationError) as exc:
-                st.warning(
-                    str(exc)
-                    if isinstance(exc, DataError)
-                    else "Please check the structured question fields."
-                )
-    previous = (
-        Plan.model_validate(ss.previous_plan) if ss.get("previous_plan") else None
-    )
-    prompt = st.chat_input("Ask a question about this selection", max_chars=2000)
+            except (DataError,ValidationError) as exc:
+                st.warning(str(exc) if isinstance(exc,DataError) else 'Please check the structured question fields.')
+    previous = Plan.model_validate(ss.previous_plan) if ss.get('previous_plan') else None
+    prompt = st.chat_input('Ask a question about this selection',max_chars=2000)
     if prompt:
         try:
-            result = execute_plan(
-                filtered, infer_plan(prompt, filtered, metric, previous)
-            )
-            save_result(result, prompt)
-            ss.pop("pending_plan", None)
+            result = execute_plan(filtered,infer_plan(prompt,filtered,metric,previous))
+            save_result(result,prompt)
+            ss.pop('pending_plan',None)
             st.rerun()
-        except (DataError, ValidationError) as exc:
-            ss.messages.extend(
-                [
-                    {"role": "user", "text": prompt},
-                    {
-                        "role": "assistant",
-                        "text": (
-                            str(exc)
-                            if isinstance(exc, DataError)
-                            else "That question produced an invalid plan. Try the structured question form."
-                        ),
-                    },
-                ]
-            )
+        except (DataError,ValidationError) as exc:
+            ss.messages.extend([{'role':'user','text':prompt},{'role':'assistant','text':str(exc) if isinstance(exc,DataError) else 'That question produced an invalid plan. Try the structured question form.'}])
             ss.messages = ss.messages[-30:]
             ss.unresolved_question = prompt
             st.rerun()
-    if ss.ai_enabled and ss.get("unresolved_question"):
-        st.caption(
-            f"Optional planner sends this question, column names/types and the last plan to {ss.ai_provider}. You must review its proposed calculation before running it."
-        )
+    if ss.ai_enabled and ss.get('unresolved_question'):
+        st.caption(f'Optional planner sends this question, column names/types and the last plan to {ss.ai_provider}. You must review its proposed calculation before running it.')
         st.write(ss.unresolved_question)
-        if st.button("Ask AI to propose a calculation"):
+        if st.button('Ask AI to propose a calculation'):
             try:
-                ss.pending_plan = (
-                    service()
-                    .propose(ss.unresolved_question, filtered, previous)
-                    .model_dump()
-                )
+                ss.pending_plan = service().propose(ss.unresolved_question,filtered,previous).model_dump()
             except DataError as exc:
                 st.warning(str(exc))
-    if ss.get("pending_plan"):
-        st.warning(
-            "Review the metric, aggregation, filters and denominator below. A valid plan can still misunderstand your question."
-        )
+    if ss.get('pending_plan'):
+        st.warning('Review the metric, aggregation, filters and denominator below. A valid plan can still misunderstand your question.')
         st.json(ss.pending_plan)
-        if st.button("Run this reviewed plan"):
+        if st.button('Run this reviewed plan'):
             try:
-                result = execute_plan(filtered, ss.pending_plan)
-                save_result(result, ss.get("unresolved_question", "Reviewed AI plan"))
-                ss.pop("pending_plan", None)
-                ss.pop("unresolved_question", None)
+                result = execute_plan(filtered,ss.pending_plan)
+                save_result(result,ss.get('unresolved_question','Reviewed AI plan'))
+                ss.pop('pending_plan',None)
+                ss.pop('unresolved_question',None)
                 st.rerun()
-            except (DataError, ValidationError) as exc:
-                st.warning(
-                    str(exc)
-                    if isinstance(exc, DataError)
-                    else "The AI plan failed validation; it was not executed."
-                )
+            except (DataError,ValidationError) as exc:
+                st.warning(str(exc) if isinstance(exc,DataError) else 'The AI plan failed validation; it was not executed.')
 
-elif page == "Reports & Export":
-    st.title("Take the evidence with you")
-    st.write(
-        "Cleaned CSV contains the full working dataset. Selection CSV, Excel and PDF use the active filters shown below."
-    )
-    st.json(context, expanded=False)
-    st.caption(
-        "Spreadsheet exports prefix potentially executable text with an apostrophe. Numeric values remain numeric."
-    )
-    left, right = st.columns(2)
-    left.download_button(
-        "Full cleaned CSV",
-        csv_bytes(df),
-        "insightai_cleaned.csv",
-        "text/csv",
-        width="stretch",
-    )
-    right.download_button(
-        "Filtered selection CSV",
-        csv_bytes(filtered),
-        "insightai_selection.csv",
-        "text/csv",
-        width="stretch",
-    )
-    st.caption(
-        "PDF includes a recorded-total category chart when a metric and breakdown are selected. It does not embed every interactive dashboard chart."
-    )
-    if st.button("Build Excel and PDF reports", type="primary"):
-        with st.spinner("Building your report…"):
-            breakdown = aggregate(filtered, group, metric) if group and metric else None
+elif page == 'Reports & Export':
+    st.title('Take the evidence with you')
+    st.write('Cleaned CSV contains the full working dataset. Selection CSV, Excel and PDF use the active filters shown below.')
+    st.json(context,expanded=False)
+    st.caption('Spreadsheet exports prefix potentially executable text with an apostrophe. Numeric values remain numeric.')
+    left,right = st.columns(2)
+    left.download_button('Full cleaned CSV',csv_bytes(df),'insightai_cleaned.csv','text/csv',width='stretch')
+    right.download_button('Filtered selection CSV',csv_bytes(filtered),'insightai_selection.csv','text/csv',width='stretch')
+    st.caption('PDF and Excel include the executive snapshot and rule-based review actions. PDF also includes a category chart if metric and breakdown are selected; interactive charts remain in the app.')
+    if st.button('Build Excel and PDF reports',type='primary'):
+        with st.spinner('Building your report…'):
             try:
-                ss.generated_exports = {
-                    "xlsx": excel_bytes(filtered, context, ss.history, breakdown),
-                    "pdf": pdf_bytes(
-                        filtered,
-                        name,
-                        context,
-                        ss.history,
-                        metric,
-                        group,
-                        dates[0] if len(dates) == 1 else None,
-                        ss.get("ai_result"),
-                    ),
-                }
+                ss.generated_exports = build_scoped_exports()
             except Exception:
-                st.error(
-                    "Report generation could not complete. Try a smaller selection; CSV export remains available."
-                )
-    if ss.get("generated_exports"):
-        left, right = st.columns(2)
-        left.download_button(
-            "Download Excel workbook",
-            ss.generated_exports["xlsx"],
-            "insightai_analysis.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            width="stretch",
-        )
-        right.download_button(
-            "Download PDF report",
-            ss.generated_exports["pdf"],
-            "insightai_report.pdf",
-            "application/pdf",
-            width="stretch",
-        )
+                st.error('Report generation could not complete. Try a smaller selection; CSV export remains available.')
+    if ss.get('generated_exports'):
+        left,right = st.columns(2)
+        left.download_button('Download Excel workbook',ss.generated_exports['xlsx'],'insightai_analysis.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',width='stretch')
+        right.download_button('Download PDF report',ss.generated_exports['pdf'],'insightai_report.pdf','application/pdf',width='stretch')
 
-elif page == "Settings / About":
-    st.title("Your workspace, your controls")
+elif page == 'Settings / About':
+    st.title('Your workspace, your controls')
     with st.container(border=True):
-        st.subheader("External AI processing")
-        st.write(
-            "External AI requests may incur charges, depending on your provider, model and billing tier. The app sends no AI request until you enable processing and click an AI action. Each browser session allows up to 10 user-triggered AI requests. Eligible transient provider failures may be retried up to twice automatically; these retries may count separately toward provider quotas. The output cap is 1,600 tokens per request. These are usage controls, not an account-wide spending cap."
-        )
+        st.subheader('External AI processing')
+        st.write('External AI requests may incur charges, depending on your provider, model and billing tier. The app sends no AI request until you enable processing and click an AI action. Each browser session allows up to 10 user-triggered AI requests. Eligible transient provider failures may be retried up to twice automatically; these retries may count separately toward provider quotas. The output cap is 1,600 tokens per request. These are usage controls, not an account-wide spending cap.')
         # Restore widget state from the permanent session key before rendering it.
         ss._ai_consent = ss.ai_enabled
-        st.checkbox(
-            "Enable external AI processing for this dataset",
-            key="_ai_consent",
-            on_change=save_ai_consent,
-        )
+        st.checkbox('Enable external AI processing for this dataset',
+                    key='_ai_consent', on_change=save_ai_consent)
         # The provider and model inputs are temporary widget keys; persistent
         # values live in ss.ai_provider and ss.model across workspace pages.
         ss._ai_provider_widget = ss.ai_provider
-        st.selectbox(
-            "AI provider",
-            ["Gemini", "OpenAI"],
-            key="_ai_provider_widget",
-            on_change=change_ai_provider,
-        )
+        st.selectbox('AI provider', ['Gemini', 'OpenAI'], key='_ai_provider_widget',
+                     on_change=change_ai_provider)
         ss._ai_model_widget = ss.model
-        st.text_input(
-            f"{ss.ai_provider} model ID",
-            key="_ai_model_widget",
-            on_change=save_ai_model,
-        )
-        st.caption(
-            f'API attempts this session: {ss.api_budget["calls"]}/{MAX_CALLS}. Configure provider spending and rate limits separately. Switching datasets disables consent, but does not reset this counter.'
-        )
-        setting = "GEMINI_API_KEY" if ss.ai_provider == "Gemini" else "OPENAI_API_KEY"
-        st.info(
-            f"{ss.ai_provider} API key is configured."
-            if credentials()
-            else f"No {ss.ai_provider} API key configured. Set {setting} in Streamlit Cloud Secrets. Local features do not need one."
-        )
-        if ss.ai_provider == "Gemini":
-            st.caption(
-                "Gemini free-tier access is model- and project-dependent and has usage limits. Do not send sensitive data on the free tier."
-            )
-    st.markdown("### Privacy and operating limits")
-    st.write(
-        "Uploaded datasets and chat live in Streamlit session memory; this app does not write them to a database or share a global data cache. Hosting infrastructure, browser memory and external AI providers have their own retention behavior. This is not a guarantee of secure deletion or tenant isolation suitable for regulated data."
-    )
-    st.write(
-        "Insights requests send displayed aggregate findings and category labels. Planner requests send your question, schema and prior structured plan. Review labels and questions for sensitive information. Provider data handling differs: OpenAI requests use store=False; Gemini requests follow Google’s retention and free-tier data-use policies."
-    )
-    st.write(
-        "Uploads: 15 MB, 100,000 rows, 100 columns, 2 million cells, 80 MB estimated DataFrame memory. XLSX expanded bytes are capped at 80 MB. Cleaning history: 50 steps. Chat: last 30 messages. Browser refresh or session loss can discard work; export it when needed."
-    )
-    st.markdown("### Beginner’s guide")
-    st.write(
-        "Pandas computes the numbers. Plotly draws the charts. Streamlit manages the screen and session. Optional Gemini or OpenAI commentary interprets a small summary. A validated plan selects trusted calculations; generated code is never executed."
-    )
-    st.write(
-        "Use the Streamlit menu → Settings to switch between light and dark themes. Dates are inferred only when already datetime or unambiguous ISO; use Data Cleaning for other formats."
-    )
-    st.caption(
-        "InsightAI 2.0 Phase 3 · Evidence-linked commentary · Original sales sample preserved"
-    )
+        st.text_input(f'{ss.ai_provider} model ID', key='_ai_model_widget',
+                      on_change=save_ai_model)
+        st.caption(f'API attempts this session: {ss.api_budget["calls"]}/{MAX_CALLS}. Configure provider spending and rate limits separately. Switching datasets disables consent, but does not reset this counter.')
+        setting = 'GEMINI_API_KEY' if ss.ai_provider == 'Gemini' else 'OPENAI_API_KEY'
+        st.info(f'{ss.ai_provider} API key is configured.' if credentials()
+                else f'No {ss.ai_provider} API key configured. Set {setting} in Streamlit Cloud Secrets. Local features do not need one.')
+        if ss.ai_provider == 'Gemini':
+            st.caption('Gemini free-tier access is model- and project-dependent and has usage limits. Do not send sensitive data on the free tier.')
+    st.markdown('### Privacy and operating limits')
+    st.write('Uploaded datasets and chat live in Streamlit session memory; this app does not write them to a database or share a global data cache. Hosting infrastructure, browser memory and external AI providers have their own retention behavior. This is not a guarantee of secure deletion or tenant isolation suitable for regulated data.')
+    st.write('Insights requests send displayed aggregate findings and category labels. Planner requests send your question, schema and prior structured plan. Review labels and questions for sensitive information. Provider data handling differs: OpenAI requests use store=False; Gemini requests follow Google’s retention and free-tier data-use policies.')
+    st.write('Uploads: 15 MB, 100,000 rows, 100 columns, 2 million cells, 80 MB estimated DataFrame memory. XLSX expanded bytes are capped at 80 MB. Cleaning history: 50 steps. Chat: last 30 messages. Browser refresh or session loss can discard work; export it when needed.')
+    st.markdown('### Beginner’s guide')
+    st.write('Pandas computes the numbers. Plotly draws the charts. Streamlit manages the screen and session. Optional Gemini or OpenAI commentary interprets a small summary. A validated plan selects trusted calculations; generated code is never executed.')
+    st.write('Use the Streamlit menu → Settings to switch between light and dark themes. Dates are inferred only when already datetime or unambiguous ISO; use Data Cleaning for other formats.')
+    st.caption('InsightAI 2.0 Phase 3 · Evidence-linked commentary · Original sales sample preserved')
 
 st.divider()
-st.caption("INSIGHTAI  /  Explore with curiosity. Decide with evidence.")
+st.caption('INSIGHTAI  /  Explore with curiosity. Decide with evidence.')
