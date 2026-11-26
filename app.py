@@ -12,6 +12,7 @@ from core.data_analysis import (numeric_columns, category_columns, date_columns,
                                profile, kpis, facts, aggregate, filter_data, monthly)
 from core.advanced_analysis import advanced_report, extra_facts
 from core.executive_report import executive_report
+from core.dataset_recognition import recognize_dataset, DOMAIN_SIGNALS
 import plotly.graph_objects as go
 from core.data_cleaning import OPERATIONS, clean, replay
 from core.chart_builder import build_chart, CHARTS
@@ -202,6 +203,8 @@ try:
         ss.filter_epoch += 1
         # Consent is dataset-scoped; API budget is session-scoped and never resets here.
         ss.ai_enabled = False
+        # A manual dataset-type choice must not carry into a different upload.
+        ss.dataset_type_override = 'Auto-detect'
         invalidate()
     df = ss.current
 except DataError as exc:
@@ -209,11 +212,23 @@ except DataError as exc:
     st.stop()
 
 nums, cats, dates = numeric_columns(df), category_columns(df), date_columns(df)
+auto_recognition = recognize_dataset(df)
 with st.sidebar:
     st.divider()
     st.markdown('#### Analysis controls')
-    metric = select('Metric', [None] + nums, 'metric', 'Revenue_NGN' if 'Revenue_NGN' in nums else (nums[0] if nums else None), format_func=lambda x: x or 'Record counts only')
-    group = select('Breakdown', [None] + cats, 'group', 'Product' if 'Product' in cats else (cats[0] if cats else None), format_func=lambda x: x or 'No category breakdown')
+    # Explicit user control; detection inspects schema only, not record contents.
+    if 'dataset_type_override' not in ss:
+        ss.dataset_type_override = 'Auto-detect'
+    domain_choice = st.selectbox('Dataset type', ['Auto-detect', *DOMAIN_SIGNALS, 'General'],
+                                 key='dataset_type_override',
+                                 help='Schema-based suggestion only; change it if the dataset was misclassified.')
+    recognition = recognize_dataset(df, override=None if domain_choice == 'Auto-detect' else domain_choice)
+    st.caption(f"Suggested type: {auto_recognition['detected_type']} · {auto_recognition['match_strength']}")
+    if recognition['override_applied']:
+        st.caption(f"Using your selected context: {recognition['active_type']}")
+    suggested = recognition['suggested_fields']
+    metric = select('Metric', [None] + nums, 'metric', suggested['metric'], format_func=lambda x: x or 'Record counts only')
+    group = select('Breakdown', [None] + cats, 'group', suggested['group'], format_func=lambda x: x or 'No category breakdown')
     unit = st.text_input('Currency / unit prefix', value='NGN ' if metric == 'Revenue_NGN' else '', key=f'unit_{metric}', max_chars=12)
     st.caption('Choose metrics carefully: totals of IDs, ages or rates may be inappropriate.')
     with st.expander('Sales field mapping (optional)'):
@@ -258,6 +273,7 @@ except DataError as exc:
     st.error(str(exc))
     st.stop()
 context = {'Dataset': name, 'Sheet': sheet or 'N/A', 'Dataset fingerprint': dataset_id[:12],
+           'Dataset type': recognition['active_type'], 'Dataset type selection': domain_choice,
            'Original rows': len(ss.original), 'Cleaned rows': len(df), 'Selected rows': len(filtered),
            'Metric': metric or 'Record counts', 'Breakdown': group or 'None', 'Unit prefix': unit or 'Unspecified',
            'Category filters': json.dumps(selections, ensure_ascii=False),
@@ -278,6 +294,28 @@ def build_scoped_exports():
         'pdf': pdf_bytes(filtered, name, context, ss.history, metric, group,
                          report_date, ss.get('ai_result'), executive=executive),
     }
+
+def show_dataset_recognition():
+    """Explain dataset-type hints without claiming certainty or sending rows anywhere."""
+    st.markdown('### Intelligent dataset recognition')
+    label = recognition['active_type']
+    selection = 'Selected by you' if recognition['override_applied'] else recognition['match_strength']
+    st.write(f"**Analysis context: {label}** · {selection}")
+    if recognition['override_applied']:
+        st.caption(f"Automatic suggestion: {recognition['detected_type']}. Change Dataset type in the sidebar to switch back.")
+    if recognition['detected_type'] == 'General' and not recognition['override_applied']:
+        st.info('Not enough distinctive field names to classify this dataset. General analysis is safer; you can choose a type manually.')
+    elif recognition['matched_columns']:
+        st.caption('Recognized field names: ' + ', '.join(recognition['matched_columns']))
+    st.caption(recognition['method'])
+    suggestions = recognition['suggested_fields']
+    st.write('**Suggested fields (not applied automatically):** ' + ' · '.join(
+        f"{kind}: {suggestions[kind] or 'none'}" for kind in ('metric', 'group', 'date')))
+    st.caption('Review metric and breakdown in the sidebar; sums of identifiers, ages, rates, or scores may be inappropriate.')
+    for recommendation in recognition['recommended_analyses']:
+        st.write('• ' + recommendation)
+    if recognition['sensitive_data_caution']:
+        st.warning('This dataset may contain sensitive personal information. Avoid sharing identifiable details with external AI providers. AI processing remains opt-in.')
 
 st.markdown(f'''<div class="workspace-header">
 <div><div class="workspace-label">INSIGHTAI WORKSPACE</div><div class="workspace-page">{escape(page)}</div></div>
@@ -306,9 +344,11 @@ if page == 'Home':
     st.markdown('### Your working data')
     st.dataframe(df.head(12), hide_index=True, width='stretch')
     st.info('Start with Data Overview in the sidebar. External AI is optional and disabled until you enable it for this dataset.')
+    st.caption(f"Schema-based dataset suggestion: {recognition['detected_type']} · {recognition['match_strength']}. Review or change Dataset type in the sidebar.")
 
 elif page == 'Data Overview':
     st.title('Know what you’re working with')
+    show_dataset_recognition()
     st.write('This profile describes the full working dataset before dashboard filters.')
     st.dataframe(profile(df), hide_index=True, width='stretch')
     st.caption('IQR flags are candidates for review, not automatic errors. Mixed-type hints do not change your data.')
@@ -427,6 +467,7 @@ elif page == 'Dashboard':
 
 elif page == 'Executive Report':
     st.title('Executive performance briefing')
+    show_dataset_recognition()
     st.caption('Decision-ready observations, not AI-generated numbers. Everything here uses the selected records and shared filters.')
     report_date = date_filter if date_filter in dates else (dates[0] if len(dates) == 1 else None)
     briefing = executive_report(filtered, metric=metric, group=group, date=report_date)
@@ -747,7 +788,7 @@ elif page == 'Settings / About':
     st.markdown('### Beginner’s guide')
     st.write('Pandas computes the numbers. Plotly draws the charts. Streamlit manages the screen and session. Optional Gemini or OpenAI commentary interprets a small summary. A validated plan selects trusted calculations; generated code is never executed.')
     st.write('Use the Streamlit menu → Settings to switch between light and dark themes. Dates are inferred only when already datetime or unambiguous ISO; use Data Cleaning for other formats.')
-    st.caption('InsightAI 2.0 Phase 3 · Evidence-linked commentary · Original sales sample preserved')
+    st.caption('InsightAI 2.0 · Phase 5 dataset recognition · Original sales sample preserved')
 
 st.divider()
 st.caption('INSIGHTAI  /  Explore with curiosity. Decide with evidence.')
