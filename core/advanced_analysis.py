@@ -95,7 +95,7 @@ def advanced_report(df: pd.DataFrame, metric: str | None = None,
                                     if not eligible else 'Shares use the total of all recorded nonmissing metric values; not just displayed groups.'}
 
     periods = None
-    if metric is not None and date is not None:
+    if metric is not None and date is not None and n_rows:
         parsed = date_series(df[date])
         if parsed is None:
             raise DataError('Date comparisons require recognized dates; clean ambiguous dates first.')

@@ -15,7 +15,7 @@ def nav(at, page):
     assert not at.exception, [e.message for e in at.exception]
     return at
 
-@pytest.mark.parametrize('page',['Home','Data Overview','Data Cleaning','Dashboard','AI Insights','Chat With Your Data','Reports & Export','Settings / About'])
+@pytest.mark.parametrize('page',['Home','Data Overview','Data Cleaning','Dashboard','Executive Report','AI Insights','Chat With Your Data','Reports & Export','Settings / About'])
 def test_pages(page):
     nav(app(),page)
 
@@ -77,3 +77,12 @@ def test_separate_sessions():
     assert 'Revenue_NGN' in second.session_state['current']
     assert 'revenue_ngn' in first.session_state['current']
     assert second.session_state['actions']==[]
+
+
+def test_phase4_executive_page_and_exports():
+    at = nav(app(), 'Executive Report')
+    assert any(m.label == 'Recorded total · Revenue_NGN' for m in at.metric)
+    field(at, 'button', 'Build executive report files').click().run()
+    assert not at.exception
+    assert at.session_state['generated_exports']['pdf'].startswith(b'%PDF')
+    assert at.session_state['generated_exports']['xlsx'].startswith(b'PK')

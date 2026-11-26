@@ -1,0 +1,265 @@
+--- a/app.py
++++ b/app.py
+@@ -11,6 +11,8 @@
+ from core.data_analysis import (numeric_columns, category_columns, date_columns, date_series,
+                                profile, kpis, facts, aggregate, filter_data, monthly)
+ from core.advanced_analysis import advanced_report, extra_facts
++from core.executive_report import executive_report
++import plotly.graph_objects as go
+ from core.data_cleaning import OPERATIONS, clean, replay
+ from core.chart_builder import build_chart, CHARTS
+ from core.chat_engine import Plan, make_plan, infer_plan, execute_plan
+@@ -161,7 +163,7 @@
+     with st.expander('Appearance · Light / Dark'):
+         st.write('Open the ⋮ menu at the top right and choose Light, Dark, or System. System follows your device preference.')
+     with st.container(key='workspace_nav'):
+-        page = st.radio('Workspace', ['Home', 'Data Overview', 'Data Cleaning', 'Dashboard', 'AI Insights',
++        page = st.radio('Workspace', ['Home', 'Data Overview', 'Data Cleaning', 'Dashboard', 'Executive Report', 'AI Insights',
+                                       'Chat With Your Data', 'Reports & Export', 'Settings / About'], key='page', label_visibility='collapsed')
+     st.divider()
+     upload = st.file_uploader('Upload CSV or Excel', type=['csv','xlsx'], help='Up to 15 MB, 100,000 rows, 100 columns, 2 million cells.')
+@@ -265,6 +267,18 @@
+ if ss.get('scope_id') != scope_id:
+     invalidate()
+     ss.scope_id = scope_id
++
++def build_scoped_exports():
++    """Create reports only for this selection; preserve evidence-linked AI scope."""
++    report_date = date_filter if date_filter in dates else (dates[0] if len(dates) == 1 else None)
++    executive = executive_report(filtered, metric=metric, group=group, date=report_date)
++    breakdown = aggregate(filtered, group, metric) if group and metric else None
++    return {
++        'xlsx': excel_bytes(filtered, context, ss.history, breakdown, executive=executive),
++        'pdf': pdf_bytes(filtered, name, context, ss.history, metric, group,
++                         report_date, ss.get('ai_result'), executive=executive),
++    }
++
+ st.markdown(f'''<div class="workspace-header">
+ <div><div class="workspace-label">INSIGHTAI WORKSPACE</div><div class="workspace-page">{escape(page)}</div></div>
+ <div class="dataset-context"><div class="dataset-name">{escape(name)}</div>
+@@ -410,6 +424,100 @@
+             st.download_button('Download chart data', csv_bytes(table.reset_index() if kind=='Correlation' else table), 'insightai_chart.csv','text/csv')
+         except DataError as exc:
+             st.info(str(exc))
++
++elif page == 'Executive Report':
++    st.title('Executive performance briefing')
++    st.caption('Decision-ready observations, not AI-generated numbers. Everything here uses the selected records and shared filters.')
++    report_date = date_filter if date_filter in dates else (dates[0] if len(dates) == 1 else None)
++    briefing = executive_report(filtered, metric=metric, group=group, date=report_date)
++
++    st.markdown('### Performance at a glance')
++    cards = briefing['cards']
++    for col, card in zip(st.columns(len(cards)), cards):
++        val = format_value(card['value'], unit) if card['kind'] == 'metric' else f"{card['value']:,}"
++        col.metric(card['label'], val, help=card['note'])
++    with st.expander('Scope and measurement notes'):
++        st.json(context, expanded=False)
++        for card in cards:
++            st.caption(f"{card['label']}: {card['note']}")
++
++    st.markdown('### The key observations')
++    for text in briefing['headlines']:
++        st.write('• ' + text)
++
++    category_rows, period_rows = briefing['category_rows'], briefing['period_rows']
++    left, right = st.columns(2)
++    with left:
++        st.markdown('#### Leading categories')
++        if category_rows:
++            top = category_rows[:8][::-1]
++            shares = all(item['contribution_pct'] is not None for item in top)
++            values = [item['contribution_pct'] if shares else item['total'] for item in top]
++            chart_title = 'Share of recorded total (%)' if shares else f'Recorded total · {metric}'
++            fig = go.Figure(go.Bar(x=values, y=[item['category'] for item in top],
++                                   orientation='h', marker_color='#0d9488'))
++            fig.update_layout(xaxis_title=chart_title, yaxis_title='',
++                              margin=dict(l=10,r=20,t=10,b=35),height=310)
++            if shares:
++                fig.update_xaxes(range=[0, max(100, max(values, default=0) * 1.1)])
++            st.plotly_chart(fig, width='stretch', config={'displaylogo': False, 'scrollZoom': False})
++            st.caption(briefing['category_note'] or 'Recorded category totals.')
++        else:
++            st.info('Choose a numeric metric and breakdown to see category performance.')
++    with right:
++        st.markdown('#### Calendar-month evidence')
++        if period_rows:
++            fig = go.Figure(go.Scatter(
++                x=[r['month'] for r in period_rows],
++                y=[r['total'] for r in period_rows],
++                mode='lines+markers', connectgaps=False,
++                line=dict(color='#0d9488',width=3), marker=dict(size=7)))
++            fig.update_layout(xaxis_title='Calendar month', yaxis_title=f'Recorded {metric}',
++                              margin=dict(l=20,r=20,t=10,b=35),height=310)
++            st.plotly_chart(fig, width='stretch', config={'displaylogo': False, 'scrollZoom': False})
++            st.caption(briefing['period_note'])
++            st.caption('Gaps are not filled with zero or connected across missing months.')
++        else:
++            st.info('Choose a numeric metric and a recognized date field to see calendar-month evidence.')
++
++    st.markdown('### Prioritized review actions')
++    st.caption('These are rule-based suggestions for investigation—not statistical significance, forecasts or proven business risks.')
++    for action in briefing['actions']:
++        with st.container(border=True):
++            st.markdown(f"**{action['priority']} review priority · {action['title']}**")
++            st.caption('Verified basis: ' + action['evidence'])
++            st.write('**Suggested next step:** ' + action['next_step'])
++
++    if ss.get('ai_result'):
++        st.markdown('### Optional AI interpretation from this selection')
++        st.caption('The following is model-generated interpretation. Review separately from Python-calculated results.')
++        st.write(ss.ai_result['executive_summary'])
++        if ss.ai_result.get('insights'):
++            for item in ss.ai_result['insights']:
++                st.write(f"**Evidence {item['evidence_id']} · {item['priority']} suggested AI priority:** {item['recommended_next_step']}")
++        else:
++            for text in ss.ai_result.get('recommendations', []):
++                st.write('• ' + text)
++    else:
++        st.caption('No AI briefing in this selection. The executive report works without Gemini or OpenAI.')
++    with st.expander('Assumptions and limitations', expanded=True):
++        for caution in briefing['cautions']:
++            st.caption('• ' + caution)
++
++    st.markdown('### Download decision-ready reports')
++    if st.button('Build executive report files', type='primary'):
++        with st.spinner('Preparing scoped Excel and PDF reports…'):
++            try:
++                ss.generated_exports = build_scoped_exports()
++            except Exception:
++                st.error('Executive export failed; existing CSV exports remain available.')
++    if ss.get('generated_exports'):
++        ex1, ex2 = st.columns(2)
++        ex1.download_button('Download executive Excel', ss.generated_exports['xlsx'],
++                            'insightai_executive.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
++                            width='stretch')
++        ex2.download_button('Download executive PDF', ss.generated_exports['pdf'],
++                            'insightai_executive.pdf', 'application/pdf', width='stretch')
+ 
+ elif page == 'AI Insights':
+     st.title('Evidence first. Interpretation second.')
+@@ -597,13 +705,11 @@
+     left,right = st.columns(2)
+     left.download_button('Full cleaned CSV',csv_bytes(df),'insightai_cleaned.csv','text/csv',width='stretch')
+     right.download_button('Filtered selection CSV',csv_bytes(filtered),'insightai_selection.csv','text/csv',width='stretch')
+-    st.caption('PDF includes a recorded-total category chart when a metric and breakdown are selected. It does not embed every interactive dashboard chart.')
++    st.caption('PDF and Excel include the executive snapshot and rule-based review actions. PDF also includes a category chart if metric and breakdown are selected; interactive charts remain in the app.')
+     if st.button('Build Excel and PDF reports',type='primary'):
+         with st.spinner('Building your report…'):
+-            breakdown = aggregate(filtered,group,metric) if group and metric else None
+             try:
+-                ss.generated_exports = {'xlsx':excel_bytes(filtered,context,ss.history,breakdown),
+-                                        'pdf':pdf_bytes(filtered,name,context,ss.history,metric,group,dates[0] if len(dates)==1 else None,ss.get('ai_result'))}
++                ss.generated_exports = build_scoped_exports()
+             except Exception:
+                 st.error('Report generation could not complete. Try a smaller selection; CSV export remains available.')
+     if ss.get('generated_exports'):
+--- a/core/report_generator.py
++++ b/core/report_generator.py
+@@ -35,7 +35,7 @@
+ def csv_bytes(df):
+     return safe_frame(df).to_csv(index=False).encode('utf-8-sig')
+ 
+-def excel_bytes(df, context, cleaning=None, breakdown=None):
++def excel_bytes(df, context, cleaning=None, breakdown=None, executive=None):
+     buffer = BytesIO()
+     frames = {'Cleaned data': df, 'Data quality': profile(df),
+               'Context': pd.DataFrame([{'Setting': k, 'Value': str(v)} for k, v in context.items()]),
+@@ -45,6 +45,25 @@
+         frames['Statistics'] = df[nums].describe().T.rename_axis('Column').reset_index()
+     if breakdown is not None:
+         frames['Analysis'] = breakdown.reset_index(drop=True)
++    if executive:
++        frames['Executive KPIs'] = pd.DataFrame([
++            {'Indicator': c['label'], 'Recorded value': c['value'], 'Definition': c['note']}
++            for c in executive['cards']])
++        frames['Review priorities'] = pd.DataFrame([
++            {'Priority': a['priority'], 'Review item': a['title'],
++             'Verified basis': a['evidence'], 'Suggested action': a['next_step'],
++             'Provenance': a['origin']} for a in executive['actions']])
++        if executive['category_rows']:
++            frames['Category performance'] = pd.DataFrame([
++                {'Category': r['category'], 'Recorded total': r['total'],
++                 'Rows': r['records'], 'Share of recorded total (%)': r['contribution_pct']}
++                for r in executive['category_rows']])
++        if executive['period_rows']:
++            frames['Monthly evidence'] = pd.DataFrame([
++                {'Calendar month': r['month'], 'Recorded total': r['total']}
++                for r in executive['period_rows']])
++        frames['Executive limitations'] = pd.DataFrame([
++            {'Caution': c} for c in executive['cautions']])
+     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+         for name, frame in frames.items():
+             safe_frame(frame).to_excel(writer, sheet_name=name, index=False)
+@@ -59,7 +78,7 @@
+                 ws.column_dimensions[col[0].column_letter].width = min(44, max(14, len(str(col[0].value or '')) + 3))
+     return buffer.getvalue()
+ 
+-def pdf_bytes(df, name, context, cleaning=None, metric=None, group=None, date=None, ai=None):
++def pdf_bytes(df, name, context, cleaning=None, metric=None, group=None, date=None, ai=None, executive=None):
+     buffer = BytesIO()
+     font_dir = Path(__file__).resolve().parents[1] / 'assets' / 'fonts'
+     if 'InsightSans' not in pdfmetrics.getRegisteredFontNames():
+@@ -73,6 +92,8 @@
+     styles.add(ParagraphStyle(name='SmallNote', fontName='InsightSans', fontSize=8, leading=11, textColor=colors.HexColor('#51636b')))
+     styles['Title'].textColor = colors.HexColor('#133e45')
+     styles['Heading2'].textColor = colors.HexColor('#0f766e')
++    styles['Heading2'].keepWithNext = True
++    styles['Heading3'].keepWithNext = True
+     styles['BodyText'].spaceAfter = 6
+     # Bundle a licensed Unicode font so PDF rendering is consistent on Windows/Linux.
+     def p(value, style='BodyText'):
+@@ -96,6 +117,33 @@
+         story.append(tbl)
+         if len(frame) > limit:
+             story.append(p(f'First {limit} of {len(frame)} rows shown. Download Excel for full analytical tables.', 'SmallNote'))
++    if executive:
++        heading('Executive snapshot - calculated locally')
++        story.append(p('Scope: selected rows and shared filters only. Recorded totals exclude missing metric values.', 'SmallNote'))
++        for card in executive['cards']:
++            value = (f"{card['value']:,.2f}" if card['kind'] == 'metric'
++                     else f"{card['value']:,}")
++            story.append(p(f"{card['label']}: {value}"))
++        heading('Key verified observations')
++        for headline in executive['headlines']:
++            story.append(p('• ' + headline))
++        heading('Prioritized actions - rule-based suggestions')
++        for item in executive['actions']:
++            story.append(KeepTogether([
++                p(f"{item['priority']} review priority: {item['title']}", 'Heading3'),
++                p('Verified basis: ' + item['evidence']),
++                p('Suggested action: ' + item['next_step']),
++            ]))
++        # Category values appear in the detailed chart/table below; avoid duplicating.
++        if executive['period_rows']:
++            heading('Monthly observations - gaps are not zero')
++            period_frame = pd.DataFrame([
++                {'Calendar month': row['month'], 'Recorded metric total': row['total']}
++                for row in executive['period_rows']])
++            table(period_frame, [175,205], 24)
++        heading('Executive caveats')
++        for text in executive['cautions']:
++            story.append(p('• ' + text, 'SmallNote'))
+     heading('Scope and filter context')
+     for k, v in context.items():
+         story.append(p(f'{k}: {v}', 'SmallNote'))
+@@ -156,7 +204,7 @@
+         for text in ai.get('limitations', []):
+             story.append(p(text))
+     heading('Limitations')
+-    story.append(p('All results describe the selected records only. Missing numeric values are excluded, not treated as zero. Summing identifiers or rates may not be meaningful; verify the metric. Correlation does not establish causation. Calendar months may be incomplete. AI narrative is unverified interpretation; numeric findings are computed with Pandas. The bundled font supports many scripts, but complex-script shaping and every Unicode glyph are not guaranteed; use Excel for exact label fidelity.'))
++    story.append(p('Results describe selected records only. Missing metric values are excluded, not replaced with zero. Verify the metric, filter coverage and calendar completeness. Correlation is not causation. AI interpretations require human review; Pandas calculates the figures. Some complex scripts may not render fully in PDF; use Excel for exact labels.'))
+     def footer(canvas, doc):
+         canvas.setFont('InsightSans', 8)
+         canvas.setFillColor(colors.HexColor('#64748b'))
+--- a/core/advanced_analysis.py
++++ b/core/advanced_analysis.py
+@@ -95,7 +95,7 @@
+                                     if not eligible else 'Shares use the total of all recorded nonmissing metric values; not just displayed groups.'}
+ 
+     periods = None
+-    if metric is not None and date is not None:
++    if metric is not None and date is not None and n_rows:
+         parsed = date_series(df[date])
+         if parsed is None:
+             raise DataError('Date comparisons require recognized dates; clean ambiguous dates first.')
